@@ -786,12 +786,7 @@ function renderScanSuppliers(suppliers){
           <span style="font-size:10px;color:var(--accent2);font-weight:500;">${s.supplier_name||'—'}</span>
           <span class="supplier-match-badge" style="color:var(--accent2);border-color:rgba(0,232,122,.3);">● HISTORICAL MATCH</span>
         </div>
-        ${s.matched_categories?.length?`<div style="margin-bottom:4px;">${s.matched_categories.map(c=>`<span class="cat-tag">${c}</span>`).join('')}</div>`:''}
-        <div style="display:flex;gap:14px;font-size:8px;color:var(--text3);margin-bottom:3px;">
-          <span>SPEND: <span style="color:var(--warn);">$${Number(s.total_spend||0).toLocaleString()}</span></span>
-          <span>TXN: <span style="color:var(--text2);">${s.transaction_count||0}</span></span>
-        </div>
-        ${s.sample_po_description?`<div style="font-size:8px;color:var(--text3);font-style:italic;line-height:1.5;">${s.sample_po_description}</div>`:''}
+        ${s.matched_categories?.length?`<div>${s.matched_categories.map(c=>`<span class="cat-tag">${c}</span>`).join('')}</div>`:''}
       </div>`).join('')
     :`<div style="font-size:8px;color:var(--text3);padding:8px 0;">No historical matches found.</div>`;
 
