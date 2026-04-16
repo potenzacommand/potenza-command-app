@@ -119,6 +119,14 @@ body{background:var(--bg);color:var(--text);font-family:var(--mono);min-height:1
 .bid-rank{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;border:1px solid var(--border2);color:var(--text2);}
 .bid-rank.rank-1{background:rgba(0,232,122,.15);border-color:var(--accent2);color:var(--accent2);}
 .bid-rating{font-size:7px;letter-spacing:1px;padding:2px 6px;border:1px solid;display:inline-block;}
+.workflow-btn{border:none;padding:11px 20px;font-size:9px;font-weight:600;letter-spacing:2px;cursor:pointer;font-family:var(--mono);transition:opacity .15s;}
+.workflow-btn:hover{opacity:.85;}
+.workflow-btn-negotiate{background:transparent;border:1px solid var(--accent2);color:var(--accent2);}
+.workflow-btn-negotiate:hover{background:rgba(0,232,122,.08);}
+.workflow-btn-award{background:var(--accent);color:#000;}
+.btn-confirm-award{width:100%;background:var(--accent2);border:none;color:#000;padding:16px;font-size:11px;font-weight:600;letter-spacing:3px;cursor:pointer;font-family:var(--mono);transition:opacity .15s;animation:glow 2.5s infinite;}
+.btn-confirm-award:disabled{opacity:.4;cursor:not-allowed;animation:none;}
+.btn-confirm-award:hover:not(:disabled){opacity:.85;}
 </style>
 </head>
 <body>
@@ -311,6 +319,7 @@ const STATUS_CFG={
   "BIDS_PENDING":{color:"#f5c842",pulse:true,label:"BIDS PENDING"},
   "BIDS_RECEIVED":{color:"#00e87a",pulse:false,label:"BIDS IN"},
   "NEGOTIATING":{color:"#ff6030",pulse:true,label:"NEGOTIATING"},
+  "AWARDING":{color:"#f5c842",pulse:true,label:"AWARDING"},
   "AWARDED":{color:"#00e87a",pulse:false,label:"AWARDED"},
 };
 const TICKER_DATA=["STEEL HR +2.4%","ALUMINUM -0.8%","COPPER +1.1%","POLYETHYLENE +0.3%","US MFG LABOR $28.40/hr","LOGISTICS INDEX +5.2%","RARE EARTH -3.1%","CRUDE OIL +0.9%","NYLON +1.7%","STAINLESS 304 -0.4%","SKILLED TRADES $42.10/hr","IT LABOR $95.00/hr","CARDBOARD +3.2%","CORN STARCH -1.1%"];
@@ -515,7 +524,13 @@ function openDrawer(idx){
         <td><span class="bid-rating" style="color:${ratingColor};border-color:${ratingBorder}">${ratingLabel}</span></td>
       </tr>`;
     });
-    body+=`</tbody></table></div></div>`;
+    body+=`</tbody></table></div>`;
+    if(r.currentStep<6){
+      body+=`<div style="display:flex;justify-content:flex-end;margin-top:12px;">
+        <button class="workflow-btn workflow-btn-negotiate" onclick="proceedToNegotiate(${idx})">PROCEED TO NEGOTIATE →</button>
+      </div>`;
+    }
+    body+=`</div>`;
   }
   if(r.cpoRec){
     const rec=r.cpoRec;
@@ -533,6 +548,61 @@ function openDrawer(idx){
     }
     body+=`</div>`;
   }
+  // ── Step 6: Negotiation ──────────────────────────────────────────────────
+  if(r.bids&&r.bids.length&&r.currentStep>=6){
+    const winner=r.bids.find(b=>b.recommended)||r.bids[0];
+    const winnerName=r.cpoRec?.recommended_supplier||winner.supplier;
+    const targetPrice=winner.unit_price?'$'+Number(winner.unit_price).toFixed(2)+'/unit':winner.price;
+    const script=r.cpoRec?.negotiation_script||'';
+    body+=`<div class="detail-section">
+      <div class="detail-section-title" style="color:var(--accent3);">⬡ STEP 6 · NEGOTIATION</div>
+      <div class="intel-block" style="margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <div style="font-size:8px;color:var(--text3);letter-spacing:2px;margin-bottom:5px;">RECOMMENDED SUPPLIER</div>
+            <div style="font-size:13px;color:var(--accent2);font-weight:600;">${winnerName}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:8px;color:var(--text3);letter-spacing:2px;margin-bottom:5px;">TARGET PRICE</div>
+            <div style="font-size:13px;color:var(--warn);font-weight:600;">${targetPrice}</div>
+          </div>
+        </div>
+      </div>
+      <div style="font-size:8px;color:var(--text3);letter-spacing:2px;margin-bottom:8px;">NEGOTIATION SCRIPT</div>
+      <div style="background:var(--bg);border:1px solid var(--border2);padding:16px;font-size:10px;color:var(--text);line-height:1.9;white-space:pre-wrap;font-family:var(--sans);margin-bottom:12px;">${script||'No script available — run Compare Quotes to generate one.'}</div>
+      <div style="display:flex;gap:10px;">
+        <button id="send-nego-btn" class="btn-secondary" style="flex:1;font-size:8px;padding:10px;" onclick="sendNegotiationEmail(${idx})">✉ SEND NEGOTIATION EMAIL</button>
+        ${r.currentStep===6?`<button class="workflow-btn workflow-btn-award" onclick="proceedToAward(${idx})" style="flex:1;">PROCEED TO AWARD →</button>`:''}
+      </div>
+    </div>`;
+  }
+
+  // ── Step 7: Award ─────────────────────────────────────────────────────────
+  if(r.bids&&r.bids.length&&r.currentStep>=7){
+    const winner=r.bids.find(b=>b.recommended)||r.bids[0];
+    const isAwarded=r.status==='AWARDED';
+    body+=`<div class="detail-section">
+      <div class="detail-section-title" style="color:var(--accent2);">✓ STEP 7 · AWARD</div>
+      <div class="detail-grid" style="margin-bottom:14px;">
+        ${[
+          ['Supplier',winner.supplier],
+          ['Unit Price',winner.unit_price?'$'+Number(winner.unit_price).toFixed(2):'—'],
+          ['Total Price',winner.price],
+          ['Lead Time',winner.lead],
+          ['Payment Terms',winner.terms],
+          ['MOQ',winner.moq!=null?Number(winner.moq).toLocaleString():'—'],
+        ].map(([k,v])=>`<div class="detail-cell"><div class="detail-key">${k}</div><div class="detail-val">${v}</div></div>`).join('')}
+      </div>
+      <div id="award-result" style="margin-bottom:${isAwarded?'0':'12px'};">
+        ${isAwarded?`<div class="rec-block" style="text-align:center;padding:20px;">
+          <div style="font-size:12px;color:var(--accent2);letter-spacing:2px;margin-bottom:8px;">✓ AWARD CONFIRMED</div>
+          <div style="font-size:10px;color:var(--text);line-height:1.8;">AWARD CONFIRMED — ${winner.supplier} awarded ${r.title}${winner.unit_price?' at $'+Number(winner.unit_price).toFixed(2)+'/unit':''}</div>
+        </div>`:''}
+      </div>
+      ${!isAwarded?`<button id="confirm-award-btn" class="btn-confirm-award" onclick="confirmAward(${idx})">✓ CONFIRM AWARD</button>`:''}
+    </div>`;
+  }
+
   document.getElementById('drawer-body').innerHTML=body;
   document.getElementById('drawer').style.display='flex';
   document.getElementById('drawer-overlay').style.display='block';
@@ -541,6 +611,87 @@ function openDrawer(idx){
 function closeDrawer(){
   document.getElementById('drawer').style.display='none';
   document.getElementById('drawer-overlay').style.display='none';
+}
+
+// ── Workflow step progression ─────────────────────────────────────────────
+function proceedToNegotiate(idx){
+  const req=REQUESTS[idx];
+  req.currentStep=6;
+  req.status='NEGOTIATING';
+  req.updated='Just now';
+  renderRequests();
+  openDrawer(idx);
+}
+
+function proceedToAward(idx){
+  const req=REQUESTS[idx];
+  req.currentStep=7;
+  req.status='AWARDING';
+  req.updated='Just now';
+  renderRequests();
+  openDrawer(idx);
+}
+
+function sendNegotiationEmail(idx){
+  const btn=document.getElementById('send-nego-btn');
+  if(!btn)return;
+  btn.textContent='✓ EMAIL QUEUED';
+  btn.disabled=true;
+  btn.style.borderColor='var(--accent2)';
+  btn.style.color='var(--accent2)';
+}
+
+async function confirmAward(idx){
+  const req=REQUESTS[idx];
+  if(!req||!req.bids?.length)return;
+  const winner=req.bids.find(b=>b.recommended)||req.bids[0];
+
+  const btn=document.getElementById('confirm-award-btn');
+  const resultEl=document.getElementById('award-result');
+  if(btn){btn.disabled=true;btn.textContent='◉ CONFIRMING AWARD...';}
+
+  const costRange=req.analysis?.cost_range||{low:0,mid:0,high:0};
+  const quantity=req.quantity||1000;
+
+  // Use emails stored from the original compare run; fall back to synthetic text
+  const emails=req.rawQuoteEmails||req.bids.map(b=>
+    `From: ${b.supplier}\nUnit Price: ${b.unit_price?'$'+b.unit_price:b.price}\nLead Time: ${b.lead}\nPayment Terms: ${b.terms}${b.moq!=null?'\nMOQ: '+b.moq:''}`
+  );
+
+  try{
+    const resp=await fetch(API_URL+'/compare',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        item_name:req.title,
+        quantity,
+        cost_range:costRange,
+        raw_quote_emails:emails,
+        award_winner:true,
+      }),
+    });
+    if(!resp.ok){
+      const err=await resp.json().catch(()=>({detail:resp.statusText}));
+      throw new Error(err.detail||'Server error '+resp.status);
+    }
+
+    req.status='AWARDED';
+    req.updated='Just now';
+
+    if(resultEl){
+      resultEl.innerHTML=`<div class="rec-block" style="text-align:center;padding:20px;">
+        <div style="font-size:12px;color:var(--accent2);letter-spacing:2px;margin-bottom:8px;">✓ AWARD CONFIRMED</div>
+        <div style="font-size:10px;color:var(--text);line-height:1.8;">AWARD CONFIRMED — ${winner.supplier} awarded ${req.title}${winner.unit_price?' at $'+Number(winner.unit_price).toFixed(2)+'/unit':''}</div>
+      </div>`;
+    }
+    if(btn)btn.style.display='none';
+    renderRequests();
+  }catch(e){
+    if(btn){btn.disabled=false;btn.textContent='✓ CONFIRM AWARD';}
+    if(resultEl){
+      resultEl.innerHTML=`<div class="error-msg" style="display:block;">Award failed: ${e.message}</div>`;
+    }
+  }
 }
 
 // ── New Request Form ───────────────────────────────────────────────────────
@@ -796,6 +947,7 @@ async function submitCompare(){
       req.savings='$'+Math.round(rec.savings_vs_mid_total).toLocaleString();
     }
     req.cpoRec=rec;
+    req.rawQuoteEmails=emails;
 
     closeQuoteModal();
     quoteFieldCount=0;
