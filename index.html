@@ -224,6 +224,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--mono);min-height:1
 .btn-rfq-confirm{flex:1;background:var(--accent2);border:none;color:#000;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:3px;padding:14px;cursor:pointer;transition:opacity .15s;}
 .btn-rfq-confirm:hover:not(:disabled){opacity:.85;}
 .btn-rfq-confirm:disabled{opacity:.4;cursor:not-allowed;}
+.card-cancel-btn{background:transparent;border:1px solid var(--border2);color:var(--text3);font-size:7px;font-family:var(--mono);padding:3px 8px;cursor:pointer;letter-spacing:1px;white-space:nowrap;}
+.card-cancel-btn:hover{border-color:var(--red);color:var(--red);}
 </style>
 </head>
 <body>
@@ -459,6 +461,7 @@ const TICKER_DATA=["STEEL HR +2.4%","ALUMINUM -0.8%","COPPER +1.1%","POLYETHYLEN
 
 let REQUESTS=[];        // populated by the intake flow (new sourcing requests this session)
 let LIVE_PIPELINE=[];   // populated by loadPipeline() from Supabase rfq_tracking
+let _sourcingRequestId=null; // Supabase sourcing_requests.id for the current scan in progress
 
 let aiAnalysis='';
 let currentForm={};
@@ -539,7 +542,10 @@ function renderLivePipeline(list){
           <div class="req-title">${g.item}</div>
           <div class="req-meta">QTY: ${Number(g.qty).toLocaleString()} lb · ${g.repliedCount} of ${g.suppliers.length} replied</div>
         </div>
-        <div class="status-badge" style="color:${cfg.color};border-color:${cfg.color};animation:${cfg.pulse?'pulse 2s infinite':'none'}">${cfg.label}</div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0;">
+          <div class="status-badge" style="color:${cfg.color};border-color:${cfg.color};animation:${cfg.pulse?'pulse 2s infinite':'none'}">${cfg.label}</div>
+          <button class="card-cancel-btn" onclick="cancelLivePipelineCard(${idx},event)">✕ CANCEL</button>
+        </div>
       </div>
       <div id="steps-live-${idx}"></div>
       <div class="req-footer">
@@ -567,7 +573,10 @@ function renderSessionRequests(){
           <div class="req-title">${r.title}</div>
           <div class="req-meta">${r.category} · ${r.type}</div>
         </div>
-        <div class="status-badge" style="color:${cfg.color};border-color:${cfg.color};animation:${cfg.pulse?'pulse 2s infinite':'none'}">${cfg.label}</div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0;">
+          <div class="status-badge" style="color:${cfg.color};border-color:${cfg.color};animation:${cfg.pulse?'pulse 2s infinite':'none'}">${cfg.label}</div>
+          <button class="card-cancel-btn" onclick="cancelSessionCard(${idx},event)">✕ CANCEL</button>
+        </div>
       </div>
       <div id="steps-${idx}"></div>
       <div class="req-footer">
@@ -1236,10 +1245,11 @@ function formatAnalysisOutput(data){
   if(a.cpo_recommendation){
     const rec=a.cpo_recommendation;
     out+='── CPO RECOMMENDATION ──\n\n';
-    out+=`Action: ${(rec.action||'').toUpperCase()}\n`;
+    out+=`Action: ${(rec.action||'').toUpperCase()} · Timing: ${(rec.timing||'').toUpperCase()}\n`;
+    out+=`Current tier: ${rec.current_tier||'—'} → Target: ${rec.target_tier||'—'}\n`;
+    if(rec.savings_vs_retail?.pct!=null)out+=`Savings vs retail: ${rec.savings_vs_retail.pct}% ($${_fmtPrice(rec.savings_vs_retail.per_unit)}/unit · $${Number(rec.savings_vs_retail.total||0).toLocaleString()} total)\n`;
     out+=`${rec.rationale||''}\n\n`;
     out+=`Strategy: ${rec.suggested_strategy||''}\n`;
-    out+=`Budget assessment: ${(rec.budget_assessment||'').toUpperCase()} · Timing: ${(rec.timing||'').toUpperCase()}\n`;
   }
   return out||JSON.stringify(data.analysis,null,2);
 }
@@ -1275,11 +1285,13 @@ async function runAnalysis(){
   const bomEl=document.getElementById('scan-bom');
   if(bomEl){bomEl.style.display='none';bomEl.innerHTML='';}
 
+  _sourcingRequestId=await _insertSourcingRequest(currentForm);
+
   try{
     const resp=await fetch(API_URL+'/analyze',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({title,description:desc,type,category:cat||'General',quantity:qty,uom,pack_size:packSize,budget}),
+      body:JSON.stringify({title,description:desc,type,category:cat||'General',quantity:qty,uom,pack_size:packSize}),
     });
     if(!resp.ok){
       const err=await resp.json().catch(()=>({detail:resp.statusText}));
@@ -1601,6 +1613,7 @@ async function launchRFQs(){
   // Advance to Step 4 on dashboard and refresh pipeline
   const sentCount=currentRFQSuppliers.filter(s=>s.status==='sent').length;
   if(sentCount>0){
+    _updateSourcingRequest(_sourcingRequestId,{status:'sent'});
     launchWorkflow(4);
     setTimeout(()=>loadPipeline(),1500);
   }
@@ -1875,6 +1888,78 @@ function renderContractResult(a,supplier){
   result.innerHTML=html;
   result.style.display='block';
   result.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+// ── sourcing_requests helpers ─────────────────────────────────────────────
+async function _insertSourcingRequest(form){
+  try{
+    const res=await fetch(`${SUPABASE_URL}/rest/v1/sourcing_requests`,{
+      method:'POST',
+      headers:{
+        'apikey':SUPABASE_ANON_KEY,
+        'Authorization':`Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type':'application/json',
+        'Prefer':'return=representation',
+      },
+      body:JSON.stringify({
+        title:form.title,
+        description:form.desc,
+        category:form.cat||'General',
+        quantity:form.qty,
+        uom:form.uom,
+        pack_size:form.packSize||null,
+        status:'scanning',
+      }),
+    });
+    if(!res.ok){console.warn('sourcing_requests insert failed:',res.status);return null;}
+    const rows=await res.json();
+    return rows[0]?.id||null;
+  }catch(e){console.warn('sourcing_requests insert error:',e);return null;}
+}
+
+async function _updateSourcingRequest(id,fields){
+  if(!id)return;
+  try{
+    await fetch(`${SUPABASE_URL}/rest/v1/sourcing_requests?id=eq.${id}`,{
+      method:'PATCH',
+      headers:{
+        'apikey':SUPABASE_ANON_KEY,
+        'Authorization':`Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type':'application/json',
+      },
+      body:JSON.stringify(fields),
+    });
+  }catch(e){console.warn('sourcing_requests update error:',e);}
+}
+
+// ── Cancel handlers ───────────────────────────────────────────────────────
+async function cancelLivePipelineCard(idx,event){
+  event.stopPropagation();
+  if(!confirm('Cancel this sourcing event? This will not recall any RFQs already sent.'))return;
+  const g=LIVE_PIPELINE[idx];
+  try{
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/rfq_tracking?item=eq.${encodeURIComponent(g.item)}`,
+      {
+        method:'PATCH',
+        headers:{
+          'apikey':SUPABASE_ANON_KEY,
+          'Authorization':`Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type':'application/json',
+        },
+        body:JSON.stringify({status:'cancelled'}),
+      }
+    );
+  }catch(e){console.warn('cancel rfq_tracking failed:',e);}
+  LIVE_PIPELINE.splice(idx,1);
+  renderRequests();
+}
+
+function cancelSessionCard(idx,event){
+  event.stopPropagation();
+  if(!confirm('Cancel this sourcing event? This will not recall any RFQs already sent.'))return;
+  REQUESTS.splice(idx,1);
+  renderRequests();
 }
 
 loadPipeline();
