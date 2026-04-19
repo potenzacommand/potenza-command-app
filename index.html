@@ -226,6 +226,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--mono);min-height:1
 .btn-rfq-confirm:disabled{opacity:.4;cursor:not-allowed;}
 .card-cancel-btn{background:transparent;border:1px solid var(--border2);color:var(--text3);font-size:7px;font-family:var(--mono);padding:3px 8px;cursor:pointer;letter-spacing:1px;white-space:nowrap;}
 .card-cancel-btn:hover{border-color:var(--red);color:var(--red);}
+.rfq-conf-preferred{color:#f5c842;border-color:rgba(245,200,66,.4);}
+.rfq-row-preferred td{background:rgba(245,200,66,.03);border-bottom:1px solid var(--border);}
 </style>
 </head>
 <body>
@@ -1304,8 +1306,8 @@ async function runAnalysis(){
     renderScanSuppliers(data.identified_suppliers);
     aiAnalysis=formatAnalysisOutput(data);
     document.getElementById('ai-output').textContent=aiAnalysis;
-    // Step 3 — show supplier confirmation table
-    renderStep3(data.identified_suppliers);
+    // Step 3 — show supplier confirmation table (async: fetches preferred suppliers)
+    await renderStep3(data.identified_suppliers);
   }catch(e){
     const errEl=document.getElementById('scan-error');
     errEl.textContent='Intelligence scan failed: '+e.message;
@@ -1323,32 +1325,97 @@ async function runAnalysis(){
 
 // ── Step 3 — RFQ Supplier Table & Launch ─────────────────────────────────
 
-function renderStep3(suppliers){
-  const external=(suppliers&&suppliers.external)||[];
-  if(!external.length)return;
+// ── preferred_suppliers Supabase helpers ──────────────────────────────────
+async function _loadPreferredSuppliers(){
+  try{
+    const res=await fetch(
+      `${SUPABASE_URL}/rest/v1/preferred_suppliers?select=*&order=use_count.desc`,
+      {headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}}
+    );
+    if(!res.ok)return[];
+    return await res.json();
+  }catch(e){console.warn('preferred_suppliers load failed:',e);return[];}
+}
 
-  // Build currentRFQSuppliers from external results
-  currentRFQSuppliers=external.map((s,i)=>{
-    // If email contains " or " (two suggestions), take only the first address.
-    let email=(s.email||'').split(' or ')[0].trim();
-    const fmt=(s.email_suggested_format||'').split(' or ')[0].trim();
-    // If email is missing but suggested_format looks like a single address, pre-populate it
-    // so the VERIFY badge doesn't implicitly block the launch button.
-    if(!email&&fmt&&fmt.includes('@')&&!fmt.includes(' ')){
-      email=fmt;
-    }
-    return {
-      idx:i,
-      name:s.name||'—',
-      website:s.website||'',
-      email,
-      email_confidence:s.email_confidence||'low',
-      needs_manual:s.needs_manual_email||false,
-      email_suggested_format:fmt,
-      status:'pending',   // pending | sending | sent | error
-      error:'',
-    };
-  });
+async function _savePreferredSupplier(name,website,email,category){
+  if(!name||name==='—'||!email)return;
+  try{
+    // Upsert by email — increment use_count if already exists
+    await fetch(`${SUPABASE_URL}/rest/v1/preferred_suppliers`,{
+      method:'POST',
+      headers:{
+        'apikey':SUPABASE_ANON_KEY,
+        'Authorization':`Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type':'application/json',
+        'Prefer':'resolution=merge-duplicates',
+      },
+      body:JSON.stringify({
+        name,
+        website:website||null,
+        email,
+        category:category||null,
+        use_count:1,
+        last_used_at:new Date().toISOString(),
+      }),
+    });
+  }catch(e){console.warn('preferred_suppliers save failed:',e);}
+}
+
+function _supplierToRFQRow(s,i,overrides={}){
+  let email=(s.email||'').split(' or ')[0].trim();
+  const fmt=(s.email_suggested_format||s.email_suggested||'').split(' or ')[0].trim();
+  if(!email&&fmt&&fmt.includes('@')&&!fmt.includes(' '))email=fmt;
+  return{
+    idx:i,
+    name:s.name||s.supplier_name||'—',
+    website:s.website||'',
+    email,
+    email_confidence:s.email_confidence||'low',
+    needs_manual:s.needs_manual_email||false,
+    email_suggested_format:fmt,
+    status:'pending',
+    error:'',
+    ...overrides,
+  };
+}
+
+async function renderStep3(suppliers){
+  const external=(suppliers&&suppliers.external)||[];
+  const category=currentForm.cat||'';
+
+  // Load preferred suppliers from Supabase (non-blocking — degrade gracefully)
+  const preferred=await _loadPreferredSuppliers();
+
+  // Category matching: score each preferred supplier
+  // Score 2: category string overlap, Score 1: any preferred supplier
+  function _prefScore(p){
+    if(!category||!p.category)return 1;
+    const cat=category.toLowerCase();
+    const pc=(p.category||'').toLowerCase();
+    return(cat.includes(pc)||pc.includes(cat)||
+      cat.split(/\W+/).some(t=>t.length>3&&pc.includes(t)))?2:1;
+  }
+
+  const sortedPreferred=preferred
+    .slice()
+    .sort((a,b)=>_prefScore(b)-_prefScore(a)||b.use_count-a.use_count);
+
+  // Deduplicate: skip preferred suppliers already in external results by email
+  const externalEmails=new Set(external.map(s=>(s.email||'').toLowerCase()));
+  const filteredPreferred=sortedPreferred.filter(
+    p=>p.email&&!externalEmails.has(p.email.toLowerCase())
+  );
+
+  // Build supplier list: preferred first, then auto-discovered
+  const preferredRows=filteredPreferred.map((p,i)=>_supplierToRFQRow(p,i,{
+    preferred:true,
+    email_confidence:'preferred',
+  }));
+  const autoRows=external.map((s,i)=>_supplierToRFQRow(s,preferredRows.length+i));
+
+  currentRFQSuppliers=[...preferredRows,...autoRows];
+  // Re-index idx to match array position
+  currentRFQSuppliers.forEach((s,i)=>s.idx=i);
 
   _renderStep3Table();
 }
@@ -1360,18 +1427,22 @@ function _renderStep3Table(){
   const rows=currentRFQSuppliers.map((s,i)=>{
     if(s.status==='removed')return '';
     const isManual=s.manual||false;
-    const confClass=isManual?'rfq-conf-manual':
+    const isPreferred=s.preferred||false;
+    const confClass=isPreferred?'rfq-conf-preferred':
+      isManual?'rfq-conf-manual':
       s.email_confidence==='verified'?'rfq-conf-high':
       s.email_confidence==='high'?'rfq-conf-high':
       s.email_confidence==='probable'?'rfq-conf-medium':
       s.email_confidence==='medium'?'rfq-conf-medium':
       s.needs_manual?'rfq-conf-manual':'rfq-conf-low';
-    const confLabel=isManual?'◎ MANUAL':
+    const confLabel=isPreferred?'★ PREFERRED':
+      isManual?'◎ MANUAL':
       s.email_confidence==='verified'?'● VERIFIED':
       s.email_confidence==='high'?'● VERIFIED':
       s.email_confidence==='probable'?'◎ PROBABLE':
       s.email_confidence==='medium'?'◎ PROBABLE':
       s.needs_manual?'⚠ VERIFY':'? UNKNOWN';
+    const rowClass=isPreferred?'rfq-row-preferred':'';
     const emailInputClass='rfq-email-input'+((!isManual&&s.needs_manual)?' needs-manual':'');
     const statusHtml=_rfqStatusHtml(s);
     const placeholder=s.email_suggested_format||'sales@example.com';
@@ -1387,7 +1458,7 @@ function _renderStep3Table(){
            value="${s.website||''}" oninput="updateRFQWebsite(${i},this.value)">`
       :`<div class="rfq-supplier-name">${s.name}</div>
         ${s.website?`<div class="rfq-supplier-website">${s.website.replace(/^https?:\/\//,'')}</div>`:''}`;
-    return `<tr id="rfq-row-${i}">
+    return `<tr id="rfq-row-${i}" class="${rowClass}">
       <td>${supplierCell}</td>
       <td>
         <div class="rfq-email-cell">
@@ -1667,8 +1738,18 @@ async function launchRFQs(){
   // Full re-render to show completion banner or remaining errors
   _renderStep3Table();
 
-  // Advance to Step 4 on dashboard and refresh pipeline
   const sentCount=currentRFQSuppliers.filter(s=>s.status==='sent').length;
+
+  // Auto-save manual suppliers that were successfully sent to preferred_suppliers
+  const category=currentForm.cat||null;
+  const manualSent=currentRFQSuppliers.filter(
+    s=>s.status==='sent'&&s.manual&&s.name&&s.name!=='—'&&s.email
+  );
+  if(manualSent.length){
+    Promise.all(manualSent.map(s=>_savePreferredSupplier(s.name,s.website,s.email,category)));
+  }
+
+  // Advance to Step 4 on dashboard and refresh pipeline
   if(sentCount>0){
     _updateSourcingRequest(_sourcingRequestId,{status:'sent'});
     launchWorkflow(4);
