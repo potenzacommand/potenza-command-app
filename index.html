@@ -1329,10 +1329,11 @@ function renderStep3(suppliers){
 
   // Build currentRFQSuppliers from external results
   currentRFQSuppliers=external.map((s,i)=>{
+    // If email contains " or " (two suggestions), take only the first address.
+    let email=(s.email||'').split(' or ')[0].trim();
+    const fmt=(s.email_suggested_format||'').split(' or ')[0].trim();
     // If email is missing but suggested_format looks like a single address, pre-populate it
     // so the VERIFY badge doesn't implicitly block the launch button.
-    let email=s.email||'';
-    const fmt=s.email_suggested_format||'';
     if(!email&&fmt&&fmt.includes('@')&&!fmt.includes(' ')){
       email=fmt;
     }
@@ -1358,24 +1359,36 @@ function _renderStep3Table(){
 
   const rows=currentRFQSuppliers.map((s,i)=>{
     if(s.status==='removed')return '';
-    const confClass=s.needs_manual?'rfq-conf-manual':
+    const isManual=s.manual||false;
+    const confClass=isManual?'rfq-conf-manual':
+      s.email_confidence==='verified'?'rfq-conf-high':
       s.email_confidence==='high'?'rfq-conf-high':
-      s.email_confidence==='medium'?'rfq-conf-medium':'rfq-conf-low';
-    const confLabel=s.needs_manual?'⚠ VERIFY':
+      s.email_confidence==='probable'?'rfq-conf-medium':
+      s.email_confidence==='medium'?'rfq-conf-medium':
+      s.needs_manual?'rfq-conf-manual':'rfq-conf-low';
+    const confLabel=isManual?'◎ MANUAL':
+      s.email_confidence==='verified'?'● VERIFIED':
       s.email_confidence==='high'?'● VERIFIED':
-      s.email_confidence==='medium'?'◎ PROBABLE':'? UNKNOWN';
-    const emailInputClass='rfq-email-input'+(s.needs_manual?' needs-manual':'');
+      s.email_confidence==='probable'?'◎ PROBABLE':
+      s.email_confidence==='medium'?'◎ PROBABLE':
+      s.needs_manual?'⚠ VERIFY':'? UNKNOWN';
+    const emailInputClass='rfq-email-input'+((!isManual&&s.needs_manual)?' needs-manual':'');
     const statusHtml=_rfqStatusHtml(s);
-    const placeholder=s.email_suggested_format||'enter email';
-    const mismatch=_emailDomainMismatch(s.email,s.website);
+    const placeholder=s.email_suggested_format||'sales@example.com';
+    const mismatch=!isManual&&_emailDomainMismatch(s.email,s.website);
     const warnIcon=mismatch
       ?`<span class="rfq-domain-warn" title="Email domain doesn't match supplier website">⚠</span>`
       :'';
+    // Manual rows get editable name + website inputs; auto rows get static display
+    const supplierCell=isManual
+      ?`<input class="rfq-email-input" style="margin-bottom:4px;display:block;" placeholder="Supplier name"
+           value="${s.name==='—'?'':s.name}" oninput="updateRFQName(${i},this.value)">
+         <input class="rfq-email-input" style="font-size:8px;" placeholder="www.example.com"
+           value="${s.website||''}" oninput="updateRFQWebsite(${i},this.value)">`
+      :`<div class="rfq-supplier-name">${s.name}</div>
+        ${s.website?`<div class="rfq-supplier-website">${s.website.replace(/^https?:\/\//,'')}</div>`:''}`;
     return `<tr id="rfq-row-${i}">
-      <td>
-        <div class="rfq-supplier-name">${s.name}</div>
-        ${s.website?`<div class="rfq-supplier-website">${s.website.replace(/^https?:\/\//,'')}</div>`:''}
-      </td>
+      <td>${supplierCell}</td>
       <td>
         <div class="rfq-email-cell">
           <input class="${emailInputClass}" id="rfq-email-${i}" type="email"
@@ -1414,10 +1427,14 @@ function _renderStep3Table(){
       </table>
       ${allSent
         ?`<div class="rfq-complete-banner">✓ RFQs SENT TO ${activeCount} SUPPLIER${activeCount!==1?'S':''}. AUTO FOLLOW-UP SCHEDULED DAY 3 AND DAY 7.</div>`
-        :`<button class="btn-launch-rfq" id="launch-rfq-btn" onclick="openRFQPreview()"
-            ${readyCount===0?'disabled':''}>
-            ▶ CONFIRM EMAILS &amp; LAUNCH RFQs →
-          </button>`
+        :`<div style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
+            <button class="btn-secondary" style="width:100%;font-size:9px;padding:10px;letter-spacing:2px;"
+              onclick="addManualSupplier()">+ ADD SUPPLIER</button>
+            <button class="btn-launch-rfq" id="launch-rfq-btn" onclick="openRFQPreview()"
+              ${readyCount===0?'disabled':''}>
+              ▶ CONFIRM EMAILS &amp; LAUNCH RFQs →
+            </button>
+          </div>`
       }
     </div>`;
   el.style.display='block';
@@ -1459,6 +1476,46 @@ function updateRFQEmail(idx,val){
 function removeRFQSupplier(idx){
   if(currentRFQSuppliers[idx])currentRFQSuppliers[idx].status='removed';
   _renderStep3Table();
+}
+
+function addManualSupplier(){
+  currentRFQSuppliers.push({
+    idx:currentRFQSuppliers.length,
+    name:'—',
+    website:'',
+    email:'',
+    email_confidence:'manual',
+    needs_manual:true,
+    email_suggested_format:'',
+    status:'pending',
+    error:'',
+    manual:true,
+  });
+  _renderStep3Table();
+  // Focus the name input of the newly added row
+  const last=currentRFQSuppliers.filter(s=>s.status!=='removed').length-1;
+  const rows=document.querySelectorAll('#step3-container tbody tr');
+  const lastRow=rows[rows.length-1];
+  if(lastRow){const inp=lastRow.querySelector('input');if(inp)inp.focus();}
+}
+
+function updateRFQName(idx,val){
+  const s=currentRFQSuppliers[idx];
+  if(s)s.name=val.trim()||'—';
+}
+
+function updateRFQWebsite(idx,val){
+  const s=currentRFQSuppliers[idx];
+  if(!s)return;
+  s.website=val.trim();
+  // Re-check domain mismatch for this row's email
+  const warnEl=document.getElementById(`rfq-warn-${idx}`);
+  if(warnEl){
+    const mismatch=_emailDomainMismatch(s.email,s.website);
+    warnEl.innerHTML=mismatch
+      ?`<span class="rfq-domain-warn" title="Email domain doesn't match supplier website">⚠</span>`
+      :'';
+  }
 }
 
 function checkRFQLaunchReady(){
