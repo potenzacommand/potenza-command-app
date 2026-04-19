@@ -633,7 +633,7 @@ async function loadPipeline(){
 
   try{
     const res=await fetch(
-      `${SUPABASE_URL}/rest/v1/rfq_tracking?select=*&order=sent_at.desc`,
+      `${SUPABASE_URL}/rest/v1/rfq_tracking?select=*&status=neq.cancelled&order=sent_at.desc`,
       {headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}}
     );
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2089,6 +2089,20 @@ async function cancelLivePipelineCard(idx,event){
       }
     );
   }catch(e){console.warn('cancel rfq_tracking failed:',e);}
+  try{
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/sourcing_requests?title=eq.${encodeURIComponent(g.item)}`,
+      {
+        method:'PATCH',
+        headers:{
+          'apikey':SUPABASE_ANON_KEY,
+          'Authorization':`Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type':'application/json',
+        },
+        body:JSON.stringify({status:'cancelled'}),
+      }
+    );
+  }catch(e){console.warn('cancel sourcing_requests failed:',e);}
   LIVE_PIPELINE.splice(idx,1);
   renderRequests();
 }
