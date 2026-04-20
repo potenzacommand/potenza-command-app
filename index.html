@@ -323,8 +323,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--mono);min-height:1
       <div class="form-row" style="grid-template-columns:1fr;">
         <div><label class="form-label">DETAILED DESCRIPTION & SPECS</label><textarea class="form-textarea" id="f-desc" rows="4" placeholder="Describe specifications, quality standards, certifications, delivery requirements..."></textarea></div>
       </div>
-      <div class="form-row" style="grid-template-columns:1fr;">
+      <div class="form-row" style="grid-template-columns:1fr 1fr;">
         <div><label class="form-label">BUDGET RANGE (OPTIONAL)</label><input class="form-input" id="f-budget" placeholder="e.g. $50,000 – $80,000 annually"></div>
+        <div><label class="form-label">DELIVERY ZIP CODE <span style="color:var(--text3);font-size:7px;">(OPTIONAL — helps find local suppliers)</span></label><input class="form-input" id="f-zip" maxlength="5" pattern="[0-9]{5}" placeholder="e.g. 33326"></div>
       </div>
       <button class="btn-primary" id="analyze-btn" onclick="runAnalysis()" disabled>▶ RUN INTELLIGENCE SCAN</button>
     </div>
@@ -648,6 +649,7 @@ function _renderMarketPricesSection(g, mpData){
   const qty=mpData?.quantity_annual||Number(sr?.quantity)||1;
   const prices=mpData?.prices_found||[];
   const floor=mpData?.minimum_savings_floor||null;
+  const deliveryLoc=mpData?.delivery_location||null;
 
   // Build set of supplier names that have RFQs sent or quotes in
   const rfqSent=new Set(g.suppliers.map(s=>(s.supplier_name||'').toLowerCase()));
@@ -677,13 +679,33 @@ function _renderMarketPricesSection(g, mpData){
     const savPct=p.savings_pct>0?`▼ ${p.savings_pct.toFixed(1)}%`:'—';
     const savAnn=p.savings_annual>0?`$${Math.round(p.savings_annual).toLocaleString()}/yr`:'—';
     const confColor=p.confidence==='HIGH'?'#00e87a':p.confidence==='MEDIUM'?'#f5c842':'#6a94ae';
+    const displayPrice=Number(p.normalized_price||p.price).toFixed(2);
+    const normNote=p.normalization&&p.normalization!=='direct'?p.normalization:'';
+
+    // Source URL — clickable verify link or unverified warning
+    const hasUrl=p.url&&p.url!=='null'&&p.url.startsWith('http');
+    const sourceCell=hasUrl
+      ? `<a href="${p.url}" target="_blank" rel="noopener" style="color:var(--accent);font-size:7px;letter-spacing:.5px;text-decoration:none;border:1px solid rgba(0,200,240,.3);padding:1px 5px;white-space:nowrap;">verify ↗</a>`
+      : `<span style="color:#f5c842;font-size:7px;letter-spacing:.5px;">⚠ unverified</span>`;
+
+    // Delivery capability
+    const ships=p.ships_to_location;
+    const deliveryCell=ships===true
+      ? `<span style="color:#00e87a;font-size:7px;">✓ Ships nationally</span>`
+      : ships===false
+      ? `<span style="color:#ff3d52;font-size:7px;">✕ Local only</span>`
+      : `<span style="color:#f5c842;font-size:7px;" title="Contact supplier to confirm delivery${deliveryLoc?' to '+deliveryLoc:''}">⚠ Verify delivery</span>`;
 
     rows+=`<tr style="border-bottom:1px solid var(--border);">
-      <td style="padding:6px 12px 6px 0;color:var(--text);font-size:9px;">${name} <span style="font-size:7px;color:${confColor};margin-left:4px;">${p.confidence||''}</span></td>
-      <td style="padding:6px 12px 6px 0;color:var(--text);text-align:right;font-size:9px;">$${Number(p.normalized_price||p.price).toFixed(2)}/${uom}</td>
-      <td style="padding:6px 12px 6px 0;color:${p.savings_pct>0?'#00e87a':'var(--text3)'};text-align:right;font-size:9px;">${savPct}</td>
-      <td style="padding:6px 12px 6px 0;color:${p.savings_annual>0?'#00e87a':'var(--text3)'};text-align:right;font-size:9px;">${savAnn}</td>
-      <td style="padding:6px 0;font-size:8px;">${badge}</td>
+      <td style="padding:6px 8px 6px 0;color:var(--text);font-size:9px;">
+        ${name}
+        ${normNote?`<div style="font-size:7px;color:var(--text3);margin-top:2px;font-style:italic;">${normNote}</div>`:''}
+      </td>
+      <td style="padding:6px 8px 6px 0;color:var(--text);text-align:right;font-size:9px;white-space:nowrap;">$${displayPrice}/${uom}</td>
+      <td style="padding:6px 8px 6px 0;color:${p.savings_pct>0?'#00e87a':'var(--text3)'};text-align:right;font-size:9px;">${savPct}</td>
+      <td style="padding:6px 8px 6px 0;color:${p.savings_annual>0?'#00e87a':'var(--text3)'};text-align:right;font-size:9px;">${savAnn}</td>
+      <td style="padding:6px 4px;font-size:8px;white-space:nowrap;">${badge||sourceCell}</td>
+      <td style="padding:6px 0;font-size:8px;white-space:nowrap;">${deliveryCell}</td>
     </tr>`;
   });
 
@@ -694,20 +716,22 @@ function _renderMarketPricesSection(g, mpData){
     summaryBar=`<div style="margin-top:10px;background:rgba(0,232,122,.06);border:1px solid rgba(0,232,122,.25);padding:9px 12px;font-size:8px;color:var(--accent2);letter-spacing:.5px;line-height:1.8;">
       MINIMUM SAVINGS TODAY: $${expLow.toLocaleString()}/yr (${floor.savings_pct.toFixed(1)}%)&nbsp;&nbsp;·&nbsp;&nbsp;EXPECTED WITH BIDS: $${expLow.toLocaleString()}–$${expHigh.toLocaleString()}/yr
       <br><span style="color:var(--text3);">Public prices shown. RFQ bids typically beat public pricing 10–20% through volume negotiation.</span>
+      ${deliveryLoc?`<br><span style="color:#f5c842;">⚠ Always confirm delivery capability to ${deliveryLoc} before ordering. National distributors marked ✓ ship to all US locations.</span>`:''}
     </div>`;
   }
 
   return `<div style="margin-bottom:14px;background:var(--bg3);border:1px solid var(--border2);padding:12px 14px;">
     <div style="font-size:7px;color:var(--accent);letter-spacing:2.5px;margin-bottom:4px;padding-bottom:6px;border-bottom:1px solid var(--border);">── WHAT'S AVAILABLE NOW ──</div>
-    <div style="font-size:7px;color:var(--text3);letter-spacing:1px;margin-bottom:10px;">Public market pricing · All prices per ${uom}</div>
+    <div style="font-size:7px;color:var(--text3);letter-spacing:1px;margin-bottom:10px;">Public market pricing · All prices per ${uom}${deliveryLoc?' · Delivery area: '+deliveryLoc:''}</div>
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
-      <table style="width:100%;border-collapse:collapse;min-width:480px;">
+      <table style="width:100%;border-collapse:collapse;min-width:560px;">
         <thead><tr style="font-size:7px;color:var(--text3);letter-spacing:1.5px;">
-          <th style="text-align:left;padding:0 12px 5px 0;font-weight:400;">SUPPLIER</th>
-          <th style="text-align:right;padding:0 12px 5px 0;font-weight:400;white-space:nowrap;">PRICE/${uom.toUpperCase()}</th>
-          <th style="text-align:right;padding:0 12px 5px 0;font-weight:400;">YOU PAY</th>
-          <th style="text-align:right;padding:0 12px 5px 0;font-weight:400;">YOU SAVE</th>
-          <th style="text-align:left;padding:0 0 5px 0;font-weight:400;">STATUS</th>
+          <th style="text-align:left;padding:0 8px 5px 0;font-weight:400;">SUPPLIER</th>
+          <th style="text-align:right;padding:0 8px 5px 0;font-weight:400;white-space:nowrap;">PRICE/${uom.toUpperCase()}</th>
+          <th style="text-align:right;padding:0 8px 5px 0;font-weight:400;">YOU SAVE</th>
+          <th style="text-align:right;padding:0 8px 5px 0;font-weight:400;">ANN. SAVINGS</th>
+          <th style="text-align:left;padding:0 8px 5px 0;font-weight:400;">SOURCE</th>
+          <th style="text-align:left;padding:0 0 5px 0;font-weight:400;">DELIVERS?</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -740,6 +764,7 @@ async function _loadMarketPrices(g, idx){
       pack_size:sr?.pack_size||null,
       current_price:Number(sr?.current_price)||null,
       sourcing_request_id:sr?.id||null,
+      delivery_zip:sr?.delivery_zip||null,
     };
     const res=await fetch(API_URL+'/market-prices',{
       method:'POST',
@@ -899,7 +924,7 @@ async function loadPipeline(){
     let srRows=[];
     try{
       const srRes=await fetch(
-        `${SUPABASE_URL}/rest/v1/sourcing_requests?select=id,title,description,quantity,uom,current_price,scan_result,market_prices_data&status=neq.cancelled`,
+        `${SUPABASE_URL}/rest/v1/sourcing_requests?select=id,title,description,quantity,uom,current_price,scan_result,market_prices_data,delivery_zip&status=neq.cancelled`,
         {headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}}
       );
       if(srRes.ok) srRows=await srRes.json();
@@ -1208,7 +1233,7 @@ function resetForm(){
   document.getElementById('intake-step2').style.display='none';
   document.getElementById('intake-actions').style.display='none';
   document.getElementById('scan-error').style.display='none';
-  ['f-title','f-cat','f-qty','f-pack','f-budget','f-desc'].forEach(id=>{
+  ['f-title','f-cat','f-qty','f-pack','f-budget','f-desc','f-zip'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.value='';
   });
   const uomEl=document.getElementById('f-uom');if(uomEl)uomEl.value='ea';
@@ -1526,8 +1551,9 @@ async function runAnalysis(){
   const packSize=packRaw?parseInt(packRaw)||null:null;
   const budgetStr=document.getElementById('f-budget').value.trim();
   const budget=parseFloat(budgetStr.replace(/[^0-9.]/g,''))||50000;
+  const deliveryZip=(document.getElementById('f-zip')?.value||'').replace(/\D/g,'').slice(0,5)||null;
 
-  currentForm={title,desc,type,cat,qty,uom,packSize,date:document.getElementById('f-date').value,budget:budgetStr};
+  currentForm={title,desc,type,cat,qty,uom,packSize,date:document.getElementById('f-date').value,budget:budgetStr,deliveryZip};
 
   document.getElementById('intake-step1').style.display='none';
   document.getElementById('intake-step2').style.display='block';
@@ -1552,7 +1578,7 @@ async function runAnalysis(){
     const resp=await fetch(API_URL+'/analyze',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({title,description:desc,type,category:cat||'General',quantity:qty,uom,pack_size:packSize}),
+      body:JSON.stringify({title,description:desc,type,category:cat||'General',quantity:qty,uom,pack_size:packSize,delivery_zip:deliveryZip||undefined}),
     });
     if(!resp.ok){
       const err=await resp.json().catch(()=>({detail:resp.statusText}));
@@ -2310,6 +2336,7 @@ async function _insertSourcingRequest(form){
         quantity:form.qty,
         uom:form.uom,
         pack_size:form.packSize||null,
+        delivery_zip:form.deliveryZip||null,
         status:'scanning',
       }),
     });
