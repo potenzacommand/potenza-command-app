@@ -1784,10 +1784,14 @@ async function runAnalysis(){
 // ── Step 3 — RFQ Supplier Table & Launch ─────────────────────────────────
 
 // ── preferred_suppliers Supabase helpers ──────────────────────────────────
-async function _loadPreferredSuppliers(){
+async function _loadPreferredSuppliers(category){
+  // Only load preferred suppliers that match this request's category.
+  // NULL-category rows are excluded by the ilike filter (ilike never matches NULL).
+  // If no category provided, return empty so no cross-category bleed occurs.
+  if(!category) return [];
   try{
     const res=await fetch(
-      `${SUPABASE_URL}/rest/v1/preferred_suppliers?select=*&order=use_count.desc`,
+      `${SUPABASE_URL}/rest/v1/preferred_suppliers?select=*&category=ilike.${encodeURIComponent(category)}&order=use_count.desc`,
       {headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}}
     );
     if(!res.ok)return[];
@@ -1841,26 +1845,13 @@ async function renderStep3(suppliers){
   const external=(suppliers&&suppliers.external)||[];
   const category=currentForm.cat||'';
 
-  // Load preferred suppliers from Supabase (non-blocking — degrade gracefully)
-  const preferred=await _loadPreferredSuppliers();
-
-  // Category matching: score each preferred supplier
-  // Score 2: category string overlap, Score 1: any preferred supplier
-  function _prefScore(p){
-    if(!category||!p.category)return 1;
-    const cat=category.toLowerCase();
-    const pc=(p.category||'').toLowerCase();
-    return(cat.includes(pc)||pc.includes(cat)||
-      cat.split(/\W+/).some(t=>t.length>3&&pc.includes(t)))?2:1;
-  }
-
-  const sortedPreferred=preferred
-    .slice()
-    .sort((a,b)=>_prefScore(b)-_prefScore(a)||b.use_count-a.use_count);
+  // Load preferred suppliers filtered to this category only.
+  // Server-side ilike filter means all returned rows already match — no JS scoring needed.
+  const preferred=await _loadPreferredSuppliers(category);
 
   // Deduplicate: skip preferred suppliers already in external results by email
   const externalEmails=new Set(external.map(s=>(s.email||'').toLowerCase()));
-  const filteredPreferred=sortedPreferred.filter(
+  const filteredPreferred=preferred.filter(
     p=>p.email&&!externalEmails.has(p.email.toLowerCase())
   );
 
