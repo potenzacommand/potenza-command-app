@@ -714,6 +714,7 @@ function _renderMarketPricesSection(g, mpData){
       <td style="padding:6px 8px 6px 0;color:var(--text);font-size:9px;">
         ${name}
         ${normNote?`<div style="font-size:7px;color:var(--text3);margin-top:2px;font-style:italic;">${normNote}</div>`:''}
+        ${p.retail_warning?`<div style="font-size:7px;color:#f5c842;margin-top:2px;">⚠ ${p.retail_warning}</div>`:''}
       </td>
       <td style="padding:6px 8px 6px 0;color:var(--text);text-align:right;font-size:9px;white-space:nowrap;">$${displayPrice}/${uom}</td>
       <td style="padding:6px 8px 6px 0;color:${p.savings_pct>0?'#00e87a':'var(--text3)'};text-align:right;font-size:9px;">${savPct}</td>
@@ -779,6 +780,7 @@ async function _loadMarketPrices(g, idx){
       current_price:Number(sr?.current_price)||null,
       sourcing_request_id:sr?.id||null,
       delivery_zip:sr?.delivery_zip||null,
+      category:sr?.category||null,
     };
     const res=await fetch(API_URL+'/market-prices',{
       method:'POST',
@@ -810,6 +812,7 @@ async function _loadScanMarketPrices(params){
       current_price:params.current_price||null,
       sourcing_request_id:params.sourcing_request_id||null,
       delivery_zip:params.delivery_zip||null,
+      category:params.category||null,
     };
     const res=await fetch(API_URL+'/market-prices',{
       method:'POST',
@@ -1074,7 +1077,7 @@ async function loadPipeline(){
     let srRows=[];
     try{
       const srRes=await fetch(
-        `${SUPABASE_URL}/rest/v1/sourcing_requests?select=id,title,description,quantity,uom,current_price,scan_result,market_prices_data,delivery_zip&status=neq.cancelled`,
+        `${SUPABASE_URL}/rest/v1/sourcing_requests?select=id,title,description,quantity,uom,current_price,scan_result,market_prices_data,delivery_zip,category&status=neq.cancelled`,
         {headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}}
       );
       if(srRes.ok) srRows=await srRes.json();
@@ -1761,6 +1764,7 @@ async function runAnalysis(){
       current_price: currentPrice||null,
       sourcing_request_id: _sourcingRequestId,
       delivery_zip: deliveryZip||null,
+      category: cat||null,
     });
   }catch(e){
     const errEl=document.getElementById('scan-error');
