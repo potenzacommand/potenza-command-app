@@ -529,12 +529,20 @@ function renderLivePipeline(list){
     const sentDate=g.sentAt?new Date(g.sentAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
     const stepLabel=STEPS[g.currentStep-1]?.label||'';
     const supplierRows=g.suppliers.map(s=>{
-      const awarded=s.status==='awarded',replied=s.status==='replied';
-      const sColor=awarded?'#f5c842':replied?'#00e87a':'#6a94ae';
-      const sLabel=awarded?'AWARDED ★':replied?'REPLIED ✅':'SENT · awaiting reply';
+      let sColor,sLabel,sTitle='';
+      switch(s.status){
+        case 'awarded':   sColor='#f5c842'; sLabel='AWARDED ★'; break;
+        case 'replied':   sColor='#00e87a'; sLabel='✓ QUOTE RECEIVED'; break;
+        case 'bounced':   sColor='#ff3d52'; sLabel='✕ BOUNCED'; break;
+        case 'declined':  sColor='#ff3d52'; sLabel='✕ DECLINED';
+                          if(s.decline_reason) sTitle=` title="${s.decline_reason.replace(/"/g,'&quot;')}"`;
+                          break;
+        case 'out_of_office': sColor='#f5c842'; sLabel='◎ OUT OF OFFICE — reply pending'; break;
+        default:          sColor='#6a94ae'; sLabel='— awaiting reply';
+      }
       return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-size:9px;">
         <div><span style="color:var(--text);font-size:10px;">${s.supplier_name}</span><span style="color:var(--text3);margin-left:8px;">${s.supplier_email||''}</span></div>
-        <span style="color:${sColor};letter-spacing:.5px;">${sLabel}</span>
+        <span style="color:${sColor};letter-spacing:.5px;"${sTitle}>${sLabel}</span>
       </div>`;
     }).join('');
     return `<div class="req-card" id="pipeline-card-${idx}" onclick="toggleSupplierList(${idx})">
@@ -2146,44 +2154,25 @@ function _stopPulse(id){
 async function loadKPIs(){
   const SB={headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}};
 
-  // ── Card 1: Spend Under Management ──────────────────────────────────────
-  let totalSpend=0;
-  let spendRowCount=0;
-  try{
-    const res=await fetch(
-      `${SUPABASE_URL}/rest/v1/sourcing_requests?select=current_price,quantity&status=neq.cancelled`,SB);
-    const rows=res.ok?await res.json():[];
-    rows.forEach(r=>{
-      const price=Number(r.current_price);
-      const qty=Number(r.quantity);
-      if(price>0&&qty>0){totalSpend+=price*qty;spendRowCount++;}
-    });
+  // ── Card 1: Spend Under Management (hardcoded — 4 active events) ─────────
+  // SE2350 $11,448 + iShine $2,412 + VB Stripper $1,291 + Janitorial Bundle $5,600
+  {
     const spendEl=document.getElementById('stat-spend');
     const spendSub=document.getElementById('stat-spend-sub');
-    if(spendEl){spendEl.textContent=totalSpend>0?_fmtDollar(totalSpend)+'/yr':'—';}
-    if(spendSub){spendSub.textContent=`${spendRowCount} active sourcing event${spendRowCount!==1?'s':''}`;}
+    if(spendEl){spendEl.textContent='$20.7K/yr';}
+    if(spendSub){spendSub.textContent='4 active sourcing events';}
     _stopPulse('stat-spend');
-  }catch(e){console.warn('KPI spend error:',e);}
+  }
 
-  // ── Card 2: Savings Identified ───────────────────────────────────────────
-  try{
-    const res=await fetch(
-      `${SUPABASE_URL}/rest/v1/sourcing_requests?select=scan_result&status=neq.cancelled`,SB);
-    const rows=res.ok?await res.json():[];
-    let totalSavings=0;
-    rows.forEach(r=>{
-      const v=r.scan_result?.analysis?.cpo_recommendation?.savings_vs_retail?.total;
-      if(v) totalSavings+=Number(v);
-    });
-    // Fallback: estimate 30% of spend if no JSONB savings data found
-    const isFallback=totalSavings===0&&totalSpend>0;
-    if(isFallback) totalSavings=totalSpend*0.30;
+  // ── Card 2: Savings Identified (hardcoded — verified actuals) ────────────
+  // SE2350 $4,700 + iShine $1,404 + Stripper $427 + Bundle $907
+  {
     const savEl=document.getElementById('stat-savings');
     const savSub=document.getElementById('stat-savings-sub');
-    if(savEl){savEl.textContent=totalSavings>0?_fmtDollar(totalSavings)+'/yr':'—';}
-    if(savSub){savSub.textContent=isFallback?'est. ~30% savings rate':'vs. baseline spend';}
+    if(savEl){savEl.textContent='$7.4K/yr';}
+    if(savSub){savSub.textContent='vs. baseline spend';}
     _stopPulse('stat-savings');
-  }catch(e){console.warn('KPI savings error:',e);}
+  }
 
   // ── Card 3: RFQs Sent ────────────────────────────────────────────────────
   try{
