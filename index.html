@@ -639,38 +639,72 @@ function toggleSupplierList(idx){
 // ── Sourcing brief helpers ────────────────────────────────────────────────
 function _extractVendor(desc){
   if(!desc) return '—';
-  const m=desc.match(/(?:from|vendor[:\s]+|supplier[:\s]+|currently\s+(?:using|with|from)\s+|current\s+vendor[:\s]+)([A-Z][A-Za-z0-9\s&\.]{1,28})/i);
-  return m?m[1].trim().replace(/[,\.;].*$/,'').trim():'—';
+  // Named vendors and contextual patterns — longer/more-specific patterns first
+  const patterns=[
+    /Imperial\s+Dade/i,
+    /(?:currently\s+sourcing\s+(?:all\s+)?from|sourcing\s+all\s+from)\s+([A-Z][A-Za-z0-9\s&\.]{1,28})/i,
+    /currently\s+(?:using|purchasing\s+(?:from|through)|buying\s+(?:from|through))\s+([A-Z][A-Za-z0-9\s&\.]{1,28})/i,
+    /(?:through|via)\s+([A-Z][A-Za-z0-9\s&\.]{1,28})/i,
+    /(?:from)\s+([A-Z][A-Za-z0-9\s&\.]{1,28})/i,
+    /(?:vendor|supplier|distributor)[:\s]+([A-Z][A-Za-z0-9\s&\.]{1,28})/i,
+    /(?:current\s+vendor|current\s+supplier)[:\s]+([A-Z][A-Za-z0-9\s&\.]{1,28})/i,
+  ];
+  for(const p of patterns){
+    const m=desc.match(p);
+    if(m){
+      // Named match (group 0 = full match, no capture group) → use full match
+      const vendor=(m[1]||m[0]).trim().replace(/[,\.;].*$/,'').trim();
+      if(vendor.length>1) return vendor;
+    }
+  }
+  return '—';
 }
 
 function _renderSourcingBrief(g){
   const sr=g.sourcingRequest;
   const item=g.item;
   const qty=sr?Number(sr.quantity):Number(g.qty);
-  const uom=(sr?.uom)||'units';
+
+  // Fix 1 — UOM: treat null/'other' as 'lot' for bundle-style items
+  const rawUom=(sr?.uom)||'';
+  const uom=(!rawUom||rawUom==='other')?'lot':rawUom;
+
   const desc=sr?.description||'';
   const specs=desc.length>62?desc.slice(0,62)+'…':desc||'—';
   const vendor=_extractVendor(desc);
   const price=sr?Number(sr.current_price):0;
   const priceDisplay=price>0?`$${price.toFixed(2)}/${uom}`:'—';
-  const annSpend=price>0&&qty>0?_fmtDollar(price*qty)+'/yr':'—';
 
-  const cr=sr?.scan_result?.cost_range_display||{};
-  const mid=Number(cr.mid)||0;
+  // Fix 2 — Annual spend: lot/other → price is already annual; otherwise price × qty
+  const isLot=uom==='lot'||rawUom==='other'||!rawUom;
+  let annSpend='—', annSpendLabel='ANN. SPEND';
+  if(price>0){
+    if(isLot){annSpend=_fmtDollar(price)+'/yr';annSpendLabel='EST. ANNUAL';}
+    else if(qty>0){annSpend=_fmtDollar(price*qty)+'/yr';}
+  }
+
+  // Fix 4 — Benchmark row always shown when price exists
+  const cr=sr?.scan_result?.cost_range_display||null;
+  const mid=cr?Number(cr.mid)||0:0;
   const midDisplay=mid>0?`$${mid.toFixed(2)}/${uom}`:'—';
-  const savings=mid>0&&price>0&&price>mid?(price-mid)*qty:0;
+  const savingsBase=isLot?1:qty;
+  const savings=mid>0&&price>0&&price>mid?(price-mid)*savingsBase:0;
   const savingsPct=savings>0&&price>0?Math.round((price-mid)/price*100):0;
   const timing=(sr?.scan_result?.analysis?.cpo_recommendation?.timing||'').toUpperCase();
 
   let bottomBar='';
-  if(mid>0){
-    bottomBar=`<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:8px;color:var(--text2);letter-spacing:.5px;line-height:2;">
-      MARKET BENCHMARK: <span style="color:var(--accent)">${midDisplay}</span>`;
-    if(savings>0){
-      bottomBar+=`&nbsp;&nbsp;|&nbsp;&nbsp;EST. SAVINGS: <span style="color:var(--accent2)">${_fmtDollar(savings)}/yr (${savingsPct}%)</span>`;
-    }
-    if(timing){
-      bottomBar+=`&nbsp;&nbsp;|&nbsp;&nbsp;TIMING: <span style="color:var(--warn)">${timing}</span>`;
+  if(price>0){
+    bottomBar=`<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:8px;color:var(--text2);letter-spacing:.5px;line-height:2;">`;
+    if(mid>0){
+      bottomBar+=`MARKET BENCHMARK: <span style="color:var(--accent)">${midDisplay}</span>`;
+      if(savings>0){
+        bottomBar+=`&nbsp;&nbsp;|&nbsp;&nbsp;EST. SAVINGS: <span style="color:var(--accent2)">${_fmtDollar(savings)}/yr (${savingsPct}%)</span>`;
+      }
+      if(timing){
+        bottomBar+=`&nbsp;&nbsp;|&nbsp;&nbsp;TIMING: <span style="color:var(--warn)">${timing}</span>`;
+      }
+    }else{
+      bottomBar+=`MARKET BENCHMARK: <span style="color:var(--text3)">pending scan</span>`;
     }
     bottomBar+='</div>';
   }
@@ -686,7 +720,7 @@ function _renderSourcingBrief(g){
           <th style="text-align:left;padding:0 12px 5px 0;font-weight:400;">UOM</th>
           <th style="text-align:left;padding:0 12px 5px 0;font-weight:400;white-space:nowrap;">CURRENT VENDOR</th>
           <th style="text-align:right;padding:0 12px 5px 0;font-weight:400;white-space:nowrap;">CURRENT PRICE</th>
-          <th style="text-align:right;padding:0 0 5px 0;font-weight:400;white-space:nowrap;">ANN. SPEND</th>
+          <th style="text-align:right;padding:0 0 5px 0;font-weight:400;white-space:nowrap;">${annSpendLabel}</th>
         </tr></thead>
         <tbody><tr style="font-size:9px;color:var(--text);">
           <td style="padding:5px 12px 5px 0;white-space:nowrap;">${item}</td>
