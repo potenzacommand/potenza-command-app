@@ -266,10 +266,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--mono);min-height:1
 <!-- DASHBOARD -->
 <div class="main" id="view-dashboard">
   <div class="stats-grid">
-    <div class="stat-card"><div class="stat-label">ACTIVE PIPELINE</div><div class="stat-value" style="color:var(--accent);" id="stat-pipeline">—</div><div class="stat-sub">sourcing requests in progress</div></div>
-    <div class="stat-card"><div class="stat-label">TOTAL CONTRACT VALUE</div><div class="stat-value" style="color:var(--warn);">$418K</div><div class="stat-sub">across all active requests</div></div>
-    <div class="stat-card"><div class="stat-label">SAVINGS IDENTIFIED</div><div class="stat-value" style="color:var(--accent2);">$43.6K</div><div class="stat-sub">vs. baseline spend</div></div>
-    <div class="stat-card"><div class="stat-label">AVG CYCLE TIME</div><div class="stat-value" style="color:var(--text2);">8.4d</div><div class="stat-sub">intake to award</div></div>
+    <div class="stat-card"><div class="stat-label">SPEND UNDER MANAGEMENT</div><div class="stat-value" style="color:var(--warn);animation:pulse 2s infinite" id="stat-spend">—</div><div class="stat-sub" id="stat-spend-sub">loading...</div></div>
+    <div class="stat-card"><div class="stat-label">SAVINGS IDENTIFIED</div><div class="stat-value" style="color:var(--accent2);animation:pulse 2s infinite" id="stat-savings">—</div><div class="stat-sub" id="stat-savings-sub">loading...</div></div>
+    <div class="stat-card"><div class="stat-label">RFQS SENT</div><div class="stat-value" style="color:var(--accent);animation:pulse 2s infinite" id="stat-rfqs">—</div><div class="stat-sub" id="stat-rfqs-sub">loading...</div></div>
+    <div class="stat-card"><div class="stat-label">REPLIES RECEIVED</div><div class="stat-value" style="color:var(--text2);animation:pulse 2s infinite" id="stat-replies">—</div><div class="stat-sub" id="stat-replies-sub">loading...</div></div>
   </div>
   <div class="section-header">
     <div><div class="section-title">SOURCING PIPELINE</div><div class="section-count">All Requests — <span id="req-count">4</span> total</div></div>
@@ -2127,7 +2127,103 @@ function cancelSessionCard(idx,event){
   renderRequests();
 }
 
+// ── KPI loader ────────────────────────────────────────────────────────────
+function _fmtDollar(n){
+  if(n>=1e6) return '$'+(n/1e6).toFixed(1)+'M';
+  if(n>=1e3) return '$'+(n/1e3).toFixed(1)+'K';
+  return '$'+Math.round(n).toLocaleString();
+}
+function _stopPulse(id){
+  const el=document.getElementById(id);
+  if(el) el.style.animation='none';
+}
+
+async function loadKPIs(){
+  const SB={headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}};
+
+  // ── Card 1: Spend Under Management ──────────────────────────────────────
+  try{
+    const [trackRes,srRes]=await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/rfq_tracking?select=item,quantity,status&status=neq.cancelled`,SB),
+      fetch(`${SUPABASE_URL}/rest/v1/sourcing_requests?select=title,current_price,scan_result&status=neq.cancelled`,SB),
+    ]);
+    const trackRows=trackRes.ok?await trackRes.json():[];
+    const srRows=srRes.ok?await srRes.json():[];
+
+    // Build price lookup from sourcing_requests
+    const priceMap={};
+    srRows.forEach(r=>{
+      const p=r.current_price||(r.scan_result?.market_data?.current_price);
+      if(p) priceMap[(r.title||'').toLowerCase()]=Number(p);
+    });
+
+    // One row per unique item (take first supplier row for quantity)
+    const seen=new Set();
+    let totalSpend=0;
+    trackRows.forEach(row=>{
+      const key=(row.item||'').toLowerCase();
+      if(seen.has(key)) return;
+      seen.add(key);
+      const qty=Number(row.quantity)||0;
+      const price=priceMap[key]||0;
+      totalSpend+=qty*price;
+    });
+
+    const spendEl=document.getElementById('stat-spend');
+    const spendSub=document.getElementById('stat-spend-sub');
+    if(spendEl){spendEl.textContent=totalSpend>0?_fmtDollar(totalSpend)+'/yr':'—';}
+    if(spendSub){spendSub.textContent=`${seen.size} active sourcing event${seen.size!==1?'s':''}`;}
+    _stopPulse('stat-spend');
+  }catch(e){console.warn('KPI spend error:',e);}
+
+  // ── Card 2: Savings Identified ───────────────────────────────────────────
+  try{
+    const res=await fetch(
+      `${SUPABASE_URL}/rest/v1/sourcing_requests?select=scan_result&status=neq.cancelled`,SB);
+    const rows=res.ok?await res.json():[];
+    let totalSavings=0;
+    rows.forEach(r=>{
+      const v=r.scan_result?.savings_vs_retail?.total;
+      if(v) totalSavings+=Number(v);
+    });
+    const savEl=document.getElementById('stat-savings');
+    const savSub=document.getElementById('stat-savings-sub');
+    if(savEl){savEl.textContent=totalSavings>0?_fmtDollar(totalSavings)+'/yr':'—';}
+    if(savSub){savSub.textContent=totalSavings>0?'vs. baseline spend':'no savings data yet';}
+    _stopPulse('stat-savings');
+  }catch(e){console.warn('KPI savings error:',e);}
+
+  // ── Card 3: RFQs Sent ────────────────────────────────────────────────────
+  try{
+    const res=await fetch(
+      `${SUPABASE_URL}/rest/v1/rfq_tracking?select=id&status=in.(sent,replied,out_of_office,bounced,declined)`,SB);
+    const rows=res.ok?await res.json():[];
+    const el=document.getElementById('stat-rfqs');
+    const sub=document.getElementById('stat-rfqs-sub');
+    if(el){el.textContent=rows.length;}
+    if(sub){sub.textContent='supplier RFQs dispatched';}
+    _stopPulse('stat-rfqs');
+  }catch(e){console.warn('KPI rfqs error:',e);}
+
+  // ── Card 4: Replies Received ─────────────────────────────────────────────
+  try{
+    const [sentRes,repliedRes]=await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/rfq_tracking?select=id&status=in.(sent,replied,out_of_office,bounced,declined)`,SB),
+      fetch(`${SUPABASE_URL}/rest/v1/rfq_tracking?select=id&status=in.(replied,out_of_office,declined)`,SB),
+    ]);
+    const sent=sentRes.ok?await sentRes.json():[];
+    const replied=repliedRes.ok?await repliedRes.json():[];
+    const el=document.getElementById('stat-replies');
+    const sub=document.getElementById('stat-replies-sub');
+    if(el){el.textContent=replied.length+' received';}
+    if(sub){sub.textContent=`${replied.length}/${sent.length} responded`;}
+    _stopPulse('stat-replies');
+  }catch(e){console.warn('KPI replies error:',e);}
+}
+
 loadPipeline();
+loadKPIs();
+setInterval(loadKPIs,60000);
 </script>
 </body>
 </html>
