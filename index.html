@@ -626,6 +626,15 @@ function toggleSupplierList(idx){
   }
 }
 
+// ── localStorage cancelled-items helpers ──────────────────────────────────
+function _getCancelledItems(){
+  try{return JSON.parse(localStorage.getItem('cancelled_items')||'[]');}catch{return[];}
+}
+function _addCancelledItem(item){
+  const list=_getCancelledItems();
+  if(!list.includes(item)){list.push(item);localStorage.setItem('cancelled_items',JSON.stringify(list));}
+}
+
 // ── Supabase pipeline loader ──────────────────────────────────────────────
 async function loadPipeline(){
   const list=document.getElementById('req-list');
@@ -645,10 +654,13 @@ async function loadPipeline(){
       return;
     }
 
-    // Group by item name
+    const cancelledItems=_getCancelledItems();
+
+    // Group by item name, skipping any locally-cancelled items
     const groups={};
     rows.forEach(row=>{
       const key=row.item||'Unknown Item';
+      if(cancelledItems.includes(key)) return;
       if(!groups[key]) groups[key]=[];
       groups[key].push(row);
     });
@@ -2103,6 +2115,7 @@ async function cancelLivePipelineCard(idx,event){
       }
     );
   }catch(e){console.warn('cancel sourcing_requests failed:',e);}
+  _addCancelledItem(g.item);
   LIVE_PIPELINE.splice(idx,1);
   renderRequests();
 }
