@@ -324,7 +324,19 @@ body{background:var(--bg);color:var(--text);font-family:var(--mono);min-height:1
         <div><label class="form-label">DETAILED DESCRIPTION & SPECS</label><textarea class="form-textarea" id="f-desc" rows="4" placeholder="Describe specifications, quality standards, certifications, delivery requirements..."></textarea></div>
       </div>
       <div class="form-row" style="grid-template-columns:1fr 1fr;">
+        <div>
+          <label class="form-label">WHAT ARE YOU CURRENTLY PAYING? <span style="color:var(--text3);font-size:7px;">(OPTIONAL)</span></label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <span style="color:var(--text3);font-size:10px;">$</span>
+            <input class="form-input" id="f-current-price" type="number" min="0" step="0.01" placeholder="0.00" style="flex:1;">
+            <span style="color:var(--text3);font-size:8px;white-space:nowrap;">per</span>
+            <span id="f-current-price-uom" style="font-size:8px;color:var(--text2);min-width:28px;">ea</span>
+          </div>
+          <div style="font-size:7px;color:var(--text3);margin-top:4px;letter-spacing:.5px;">Helps us calculate your exact savings</div>
+        </div>
         <div><label class="form-label">BUDGET RANGE (OPTIONAL)</label><input class="form-input" id="f-budget" placeholder="e.g. $50,000 – $80,000 annually"></div>
+      </div>
+      <div class="form-row" style="grid-template-columns:1fr;">
         <div><label class="form-label">DELIVERY ZIP CODE <span style="color:var(--text3);font-size:7px;">(OPTIONAL — helps find local suppliers)</span></label><input class="form-input" id="f-zip" maxlength="5" pattern="[0-9]{5}" placeholder="e.g. 33326"></div>
       </div>
       <button class="btn-primary" id="analyze-btn" onclick="runAnalysis()" disabled>▶ RUN INTELLIGENCE SCAN</button>
@@ -344,6 +356,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--mono);min-height:1
       <div id="intake-actions" style="display:none;flex-direction:row;gap:10px;">
         <button class="btn-secondary" onclick="backToStep1()">← EDIT REQUEST</button>
       </div>
+      <div id="scan-market-prices" style="display:none;margin-bottom:16px;"></div>
       <div id="step3-container" style="display:none;"></div>
     </div>
   </div>
@@ -567,6 +580,7 @@ function renderLivePipeline(list){
       </div>
       <div id="supplier-list-${idx}" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:12px;">
         ${_renderSourcingBrief(g)}
+        ${_renderMarketIntelligence(g)}
         <div id="mp-section-${idx}"></div>
         <div style="font-size:7px;color:var(--text3);letter-spacing:2px;margin-bottom:8px;">── SUPPLIER STATUS ──</div>
         ${supplierRows}
@@ -780,6 +794,48 @@ async function _loadMarketPrices(g, idx){
   }
 }
 
+// ── Scan-view market prices loader (Fix 1) ───────────────────────────────
+async function _loadScanMarketPrices(params){
+  const el=document.getElementById('scan-market-prices');
+  if(!el) return;
+  el.style.display='block';
+  el.innerHTML=`<div style="font-size:8px;color:var(--accent);letter-spacing:2px;padding:14px 0;animation:pulse 2s infinite;">◉ SCANNING PUBLIC MARKET PRICES...</div>`;
+  try{
+    const body={
+      title:params.title,
+      description:params.description||'',
+      quantity:Number(params.quantity||1),
+      uom:params.uom||'ea',
+      pack_size:params.packSize||null,
+      current_price:params.current_price||null,
+      sourcing_request_id:params.sourcing_request_id||null,
+      delivery_zip:params.delivery_zip||null,
+    };
+    const res=await fetch(API_URL+'/market-prices',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body),
+    });
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data=await res.json();
+    // Render using a synthetic group object so _renderMarketPricesSection works
+    const fakeGroup={
+      item:params.title,
+      suppliers:[],
+      sourcingRequest:{
+        description:params.description||'',
+        uom:params.uom,
+        quantity:params.quantity,
+        current_price:params.current_price,
+        market_prices_data:data,
+      },
+    };
+    el.innerHTML=_renderMarketPricesSection(fakeGroup,data);
+  }catch(e){
+    el.innerHTML=`<div style="font-size:8px;color:var(--text3);padding:10px 0;">Market price scan unavailable — ${e.message}</div>`;
+  }
+}
+
 // ── Sourcing brief helpers ────────────────────────────────────────────────
 function _extractVendor(desc){
   if(!desc) return '—';
@@ -804,6 +860,98 @@ function _extractVendor(desc){
   return '—';
 }
 
+// ── Market intelligence section for dashboard cards (Fix 2) ──────────────
+function _renderMarketIntelligence(g){
+  const sr=g.sourcingRequest;
+  if(!sr?.scan_result) return '';
+  const scan=sr.scan_result;
+  const cr=scan.cost_range_display||null;
+  const analysis=scan.analysis||{};
+  const cpo=analysis.cpo_recommendation||null;
+  const bom=(analysis.bom_breakdown||[]).filter(b=>b&&Number(b.estimated_cost_pct)>0);
+  const risks=(analysis.market_risks||[]).slice(0,3);
+  const uom=(sr.uom||'unit').toUpperCase();
+
+  // ── Price stack cards ─────────────────────────────────────────────────────
+  let priceStack='';
+  if(cr&&cr.low!=null){
+    const confColor=cr.confidence==='high'?'#00e87a':cr.confidence==='medium'?'#f5c842':'#6a94ae';
+    const card=(val,label,highlight)=>{
+      const c=highlight?'var(--accent)':'var(--text2)';
+      return `<div style="flex:1;background:var(--bg2);border:1px solid var(--border);padding:8px 10px;text-align:center;">
+        <div style="font-size:7px;color:var(--text3);letter-spacing:1.5px;margin-bottom:4px;">${label}</div>
+        <div style="font-size:13px;color:${c};font-weight:300;">$${Number(val).toFixed(2)}</div>
+        <div style="font-size:7px;color:var(--text3);margin-top:2px;">/ ${uom}</div>
+      </div>`;
+    };
+    priceStack=`<div style="margin-bottom:10px;">
+      <div style="font-size:7px;color:var(--text3);letter-spacing:1.5px;margin-bottom:6px;">MARKET COST RANGE · PER ${uom}</div>
+      <div style="display:flex;gap:6px;">
+        ${card(cr.low,'LOW',false)}
+        ${card(cr.mid,'MID · BASELINE',true)}
+        ${card(cr.high,'HIGH',false)}
+      </div>
+      <div style="font-size:7px;color:var(--text3);margin-top:4px;">Confidence: <span style="color:${confColor};">${(cr.confidence||'—').toUpperCase()}</span></div>
+    </div>`;
+  }
+
+  // ── BOM cost driver bar ───────────────────────────────────────────────────
+  let bomHtml='';
+  if(bom.length){
+    const COLORS=['#00d4ff','#00ff88','#ffaa00','#aa88ff','#ff6688'];
+    const total=bom.reduce((s,b)=>s+Number(b.estimated_cost_pct||0),0)||100;
+    const segs=bom.map((b,i)=>{
+      const w=(Number(b.estimated_cost_pct||0)/total*100).toFixed(2);
+      const col=COLORS[i%COLORS.length];
+      return`<div style="width:${w}%;height:100%;background:${col};position:relative;" title="${b.component} — ${b.estimated_cost_pct}%"></div>`;
+    }).join('');
+    const legend=bom.map((b,i)=>`<span style="color:${COLORS[i%COLORS.length]};font-size:7px;">${b.component} ${b.estimated_cost_pct}%</span>`).join(' · ');
+    bomHtml=`<div style="margin-bottom:10px;">
+      <div style="font-size:7px;color:var(--text3);letter-spacing:1.5px;margin-bottom:6px;">COST DRIVERS</div>
+      <div style="height:6px;display:flex;border-radius:2px;overflow:hidden;margin-bottom:5px;">${segs}</div>
+      <div style="line-height:1.8;">${legend}</div>
+    </div>`;
+  }
+
+  // ── CPO recommendation strip ──────────────────────────────────────────────
+  let cpoHtml='';
+  if(cpo){
+    const action=(cpo.action||'').toUpperCase();
+    const timing=(cpo.timing||'').toUpperCase();
+    const savAnn=cpo.savings_vs_retail?.total||cpo.savings_annual||0;
+    const savPct=cpo.savings_vs_retail?.pct||cpo.savings_pct||0;
+    const fromTier=(cpo.current_tier||'').toUpperCase();
+    const toTier=(cpo.target_tier||'').toUpperCase();
+    const savStr=savAnn>0?` · SAVINGS: $${Math.round(savAnn).toLocaleString()}/yr${savPct>0?` (${savPct}%)`:''}`:' ';
+    const tierStr=(fromTier&&toTier)?` · ${fromTier} → ${toTier}`:'';
+    cpoHtml=`<div style="margin-bottom:10px;background:rgba(0,232,122,.07);border:1px solid rgba(0,232,122,.3);padding:8px 12px;font-family:monospace;font-size:8px;color:var(--accent2);letter-spacing:.5px;line-height:1.6;">
+      ACTION: ${action} · TIMING: ${timing}${savStr}${tierStr}
+    </div>`;
+  }
+
+  // ── Market risk tags ──────────────────────────────────────────────────────
+  let riskHtml='';
+  if(risks.length){
+    const tags=risks.map(r=>{
+      const d=(r.direction||'').toLowerCase();
+      const col=d==='rising'||d==='volatile'?'#ff3d52':d==='falling'?'#00e87a':'#f5c842';
+      const arrow=d==='rising'||d==='volatile'?'↑':d==='falling'?'↓':'→';
+      return`<span style="font-size:7px;color:${col};border:1px solid ${col}55;padding:2px 6px;letter-spacing:.5px;">${arrow} ${r.commodity||r.risk||''}</span>`;
+    }).join(' ');
+    riskHtml=`<div style="margin-bottom:10px;">
+      <div style="font-size:7px;color:var(--text3);letter-spacing:1.5px;margin-bottom:5px;">MARKET RISKS</div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px;">${tags}</div>
+    </div>`;
+  }
+
+  if(!priceStack&&!bomHtml&&!cpoHtml&&!riskHtml) return '';
+
+  return `<div style="margin-bottom:14px;background:var(--bg3);border:1px solid var(--border2);padding:12px 14px;">
+    <div style="font-size:7px;color:var(--accent);letter-spacing:2.5px;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border);">── MARKET INTELLIGENCE ──</div>
+    ${priceStack}${cpoHtml}${bomHtml}${riskHtml}
+  </div>`;
+}
+
 function _renderSourcingBrief(g){
   const sr=g.sourcingRequest;
   const item=g.item;
@@ -816,15 +964,17 @@ function _renderSourcingBrief(g){
   const desc=sr?.description||'';
   const specs=desc.length>62?desc.slice(0,62)+'…':desc||'—';
   const vendor=_extractVendor(desc);
-  const price=sr?Number(sr.current_price):0;
-  const priceDisplay=price>0?`$${price.toFixed(2)}/${uom}`:'—';
+  const price=sr?Number(sr.current_price)||0:0;
+  const priceDisplay=price>0?`$${price.toFixed(2)}/${uom}`:`<span style="color:var(--text3);">Not provided</span>`;
 
-  // Fix 2 — Annual spend: lot/other → price is already annual; otherwise price × qty
+  // Annual spend: lot/other → price is already annual; otherwise price × qty
   const isLot=uom==='lot'||rawUom==='other'||!rawUom;
   let annSpend='—', annSpendLabel='ANN. SPEND';
   if(price>0){
     if(isLot){annSpend=_fmtDollar(price)+'/yr';annSpendLabel='EST. ANNUAL BASKET';}
     else if(qty>0){annSpend=_fmtDollar(price*qty)+'/yr';}
+  } else {
+    annSpend=`<span style="color:var(--text3);">Not provided</span>`;
   }
 
   // Fix 4 — Benchmark row always shown when price exists
@@ -1233,7 +1383,7 @@ function resetForm(){
   document.getElementById('intake-step2').style.display='none';
   document.getElementById('intake-actions').style.display='none';
   document.getElementById('scan-error').style.display='none';
-  ['f-title','f-cat','f-qty','f-pack','f-budget','f-desc','f-zip'].forEach(id=>{
+  ['f-title','f-cat','f-qty','f-pack','f-budget','f-desc','f-zip','f-current-price'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.value='';
   });
   const uomEl=document.getElementById('f-uom');if(uomEl)uomEl.value='ea';
@@ -1243,6 +1393,8 @@ function resetForm(){
   if(crEl){crEl.innerHTML='';crEl.style.display='none';}
   const supEl=document.getElementById('scan-suppliers');
   if(supEl){supEl.innerHTML='';supEl.style.display='none';}
+  const mpEl=document.getElementById('scan-market-prices');
+  if(mpEl){mpEl.innerHTML='';mpEl.style.display='none';}
   aiAnalysis='';
   currentAnalysis=null;
 }
@@ -1268,6 +1420,9 @@ function onQtyUomChange(){
     const packEl=document.getElementById('f-pack');
     if(packEl)packEl.value='';
   }
+  // Keep current-price UOM label in sync
+  const uomLabel=document.getElementById('f-current-price-uom');
+  if(uomLabel)uomLabel.textContent=uom||'ea';
 }
 
 function _fmtQtyDisplay(qty,uom,packSize){
@@ -1552,8 +1707,10 @@ async function runAnalysis(){
   const budgetStr=document.getElementById('f-budget').value.trim();
   const budget=parseFloat(budgetStr.replace(/[^0-9.]/g,''))||50000;
   const deliveryZip=(document.getElementById('f-zip')?.value||'').replace(/\D/g,'').slice(0,5)||null;
+  const currentPriceRaw=parseFloat(document.getElementById('f-current-price')?.value)||0;
+  const currentPrice=currentPriceRaw>0?currentPriceRaw:null;
 
-  currentForm={title,desc,type,cat,qty,uom,packSize,date:document.getElementById('f-date').value,budget:budgetStr,deliveryZip};
+  currentForm={title,desc,type,cat,qty,uom,packSize,date:document.getElementById('f-date').value,budget:budgetStr,deliveryZip,currentPrice};
 
   document.getElementById('intake-step1').style.display='none';
   document.getElementById('intake-step2').style.display='block';
@@ -1578,7 +1735,7 @@ async function runAnalysis(){
     const resp=await fetch(API_URL+'/analyze',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({title,description:desc,type,category:cat||'General',quantity:qty,uom,pack_size:packSize,delivery_zip:deliveryZip||undefined}),
+      body:JSON.stringify({title,description:desc,type,category:cat||'General',quantity:qty,uom,pack_size:packSize,delivery_zip:deliveryZip||undefined,current_price:currentPrice||undefined}),
     });
     if(!resp.ok){
       const err=await resp.json().catch(()=>({detail:resp.statusText}));
@@ -1586,9 +1743,9 @@ async function runAnalysis(){
     }
     const data=await resp.json();
     currentAnalysis=data.analysis;
-    // Persist market price + full scan result to sourcing_requests row
+    // Persist scan result; only save current_price if customer explicitly entered it
     _updateSourcingRequest(_sourcingRequestId,{
-      current_price:data.cost_range_display?.mid||null,
+      ...(currentPrice?{current_price:currentPrice}:{}),
       scan_result:data,
     });
     renderScanCostRange(data.cost_range_display,uom,packSize);
@@ -1598,6 +1755,13 @@ async function runAnalysis(){
     document.getElementById('ai-output').textContent=aiAnalysis;
     // Step 3 — show supplier confirmation table (async: fetches preferred suppliers)
     await renderStep3(data.identified_suppliers);
+    // Market prices — show inline after step 3
+    _loadScanMarketPrices({
+      title, description:desc, quantity:qty, uom, packSize,
+      current_price: currentPrice||null,
+      sourcing_request_id: _sourcingRequestId,
+      delivery_zip: deliveryZip||null,
+    });
   }catch(e){
     const errEl=document.getElementById('scan-error');
     errEl.textContent='Intelligence scan failed: '+e.message;
@@ -2337,6 +2501,7 @@ async function _insertSourcingRequest(form){
         uom:form.uom,
         pack_size:form.packSize||null,
         delivery_zip:form.deliveryZip||null,
+        current_price:form.currentPrice||null,
         status:'scanning',
       }),
     });
