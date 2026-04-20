@@ -565,6 +565,8 @@ function renderLivePipeline(list){
         <span style="color:var(--text3);font-size:8px;">▾ CLICK TO EXPAND</span>
       </div>
       <div id="supplier-list-${idx}" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:12px;">
+        ${_renderSourcingBrief(g)}
+        <div style="font-size:7px;color:var(--text3);letter-spacing:2px;margin-bottom:8px;">── SUPPLIER STATUS ──</div>
         ${supplierRows}
       </div>
     </div>`;
@@ -634,6 +636,73 @@ function toggleSupplierList(idx){
   }
 }
 
+// ── Sourcing brief helpers ────────────────────────────────────────────────
+function _extractVendor(desc){
+  if(!desc) return '—';
+  const m=desc.match(/(?:from|vendor[:\s]+|supplier[:\s]+|currently\s+(?:using|with|from)\s+|current\s+vendor[:\s]+)([A-Z][A-Za-z0-9\s&\.]{1,28})/i);
+  return m?m[1].trim().replace(/[,\.;].*$/,'').trim():'—';
+}
+
+function _renderSourcingBrief(g){
+  const sr=g.sourcingRequest;
+  const item=g.item;
+  const qty=sr?Number(sr.quantity):Number(g.qty);
+  const uom=(sr?.uom)||'units';
+  const desc=sr?.description||'';
+  const specs=desc.length>62?desc.slice(0,62)+'…':desc||'—';
+  const vendor=_extractVendor(desc);
+  const price=sr?Number(sr.current_price):0;
+  const priceDisplay=price>0?`$${price.toFixed(2)}/${uom}`:'—';
+  const annSpend=price>0&&qty>0?_fmtDollar(price*qty)+'/yr':'—';
+
+  const cr=sr?.scan_result?.cost_range_display||{};
+  const mid=Number(cr.mid)||0;
+  const midDisplay=mid>0?`$${mid.toFixed(2)}/${uom}`:'—';
+  const savings=mid>0&&price>0&&price>mid?(price-mid)*qty:0;
+  const savingsPct=savings>0&&price>0?Math.round((price-mid)/price*100):0;
+  const timing=(sr?.scan_result?.analysis?.cpo_recommendation?.timing||'').toUpperCase();
+
+  let bottomBar='';
+  if(mid>0){
+    bottomBar=`<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:8px;color:var(--text2);letter-spacing:.5px;line-height:2;">
+      MARKET BENCHMARK: <span style="color:var(--accent)">${midDisplay}</span>`;
+    if(savings>0){
+      bottomBar+=`&nbsp;&nbsp;|&nbsp;&nbsp;EST. SAVINGS: <span style="color:var(--accent2)">${_fmtDollar(savings)}/yr (${savingsPct}%)</span>`;
+    }
+    if(timing){
+      bottomBar+=`&nbsp;&nbsp;|&nbsp;&nbsp;TIMING: <span style="color:var(--warn)">${timing}</span>`;
+    }
+    bottomBar+='</div>';
+  }
+
+  return `<div style="margin-bottom:14px;background:var(--bg3);border:1px solid var(--border2);padding:12px 14px;">
+    <div style="font-size:7px;color:var(--accent);letter-spacing:2.5px;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border);">── SOURCING BRIEF ──</div>
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
+      <table style="width:100%;border-collapse:collapse;min-width:560px;">
+        <thead><tr style="font-size:7px;color:var(--text3);letter-spacing:1.5px;">
+          <th style="text-align:left;padding:0 12px 5px 0;font-weight:400;white-space:nowrap;">PRODUCT / SERVICE</th>
+          <th style="text-align:left;padding:0 12px 5px 0;font-weight:400;">SPECS</th>
+          <th style="text-align:right;padding:0 12px 5px 0;font-weight:400;">QTY</th>
+          <th style="text-align:left;padding:0 12px 5px 0;font-weight:400;">UOM</th>
+          <th style="text-align:left;padding:0 12px 5px 0;font-weight:400;white-space:nowrap;">CURRENT VENDOR</th>
+          <th style="text-align:right;padding:0 12px 5px 0;font-weight:400;white-space:nowrap;">CURRENT PRICE</th>
+          <th style="text-align:right;padding:0 0 5px 0;font-weight:400;white-space:nowrap;">ANN. SPEND</th>
+        </tr></thead>
+        <tbody><tr style="font-size:9px;color:var(--text);">
+          <td style="padding:5px 12px 5px 0;white-space:nowrap;">${item}</td>
+          <td style="padding:5px 12px 5px 0;color:var(--text2);max-width:180px;">${specs}</td>
+          <td style="padding:5px 12px 5px 0;text-align:right;">${Number(qty).toLocaleString()}</td>
+          <td style="padding:5px 12px 5px 0;color:var(--text2);">${uom}</td>
+          <td style="padding:5px 12px 5px 0;color:var(--text2);white-space:nowrap;">${vendor}</td>
+          <td style="padding:5px 12px 5px 0;text-align:right;color:var(--warn);">${priceDisplay}</td>
+          <td style="padding:5px 0;text-align:right;color:var(--warn);">${annSpend}</td>
+        </tr></tbody>
+      </table>
+    </div>
+    ${bottomBar}
+  </div>`;
+}
+
 // ── localStorage cancelled-items helpers ──────────────────────────────────
 function _getCancelledItems(){
   try{return JSON.parse(localStorage.getItem('cancelled_items')||'[]');}catch{return[];}
@@ -673,6 +742,16 @@ async function loadPipeline(){
       groups[key].push(row);
     });
 
+    // Fetch sourcing_requests to attach brief data to each pipeline group
+    let srRows=[];
+    try{
+      const srRes=await fetch(
+        `${SUPABASE_URL}/rest/v1/sourcing_requests?select=title,description,quantity,uom,current_price,scan_result&status=neq.cancelled`,
+        {headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}}
+      );
+      if(srRes.ok) srRows=await srRes.json();
+    }catch(e){console.warn('sourcing_requests fetch failed:',e);}
+
     LIVE_PIPELINE=Object.entries(groups).map(([item,suppliers])=>{
       const qty=suppliers[0]?.quantity||0;
       const repliedCount=suppliers.filter(s=>s.status==='replied').length;
@@ -684,7 +763,14 @@ async function loadPipeline(){
       else if(repliedCount===suppliers.length&&repliedCount>0){currentStep=5;pipelineStatus='BIDS_RECEIVED';}
       else if(repliedCount>0){currentStep=4;pipelineStatus='BIDS_PENDING';}
 
-      return {item,suppliers,qty,repliedCount,awardedCount,currentStep,pipelineStatus,sentAt};
+      // Match sourcing_request by exact title or substring
+      const itemKey=item.toLowerCase().trim();
+      const sourcingRequest=srRows.find(r=>{
+        const t=(r.title||'').toLowerCase().trim();
+        return t===itemKey||t.includes(itemKey)||itemKey.includes(t);
+      })||null;
+
+      return {item,suppliers,qty,repliedCount,awardedCount,currentStep,pipelineStatus,sentAt,sourcingRequest};
     });
 
     renderRequests();
