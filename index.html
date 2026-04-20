@@ -566,6 +566,7 @@ function renderLivePipeline(list){
       </div>
       <div id="supplier-list-${idx}" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:12px;">
         ${_renderSourcingBrief(g)}
+        <div id="mp-section-${idx}"></div>
         <div style="font-size:7px;color:var(--text3);letter-spacing:2px;margin-bottom:8px;">── SUPPLIER STATUS ──</div>
         ${supplierRows}
       </div>
@@ -628,11 +629,129 @@ function toggleSupplierList(idx){
   if(!el) return;
   const isOpen=el.style.display!=='none';
   el.style.display=isOpen?'none':'block';
-  // Update the expand hint text
   const card=document.getElementById('pipeline-card-'+idx);
   if(card){
     const hint=card.querySelector('.req-footer span:last-child');
     if(hint) hint.textContent=isOpen?'▾ CLICK TO EXPAND':'▴ CLICK TO COLLAPSE';
+  }
+  // Trigger market price load on first open
+  if(!isOpen && LIVE_PIPELINE[idx]){
+    _loadMarketPrices(LIVE_PIPELINE[idx], idx);
+  }
+}
+
+// ── Market prices helpers ─────────────────────────────────────────────────
+function _renderMarketPricesSection(g, mpData){
+  const sr=g.sourcingRequest;
+  const uom=mpData?.uom||(sr?.uom)||'unit';
+  const currentPrice=mpData?.current_price||Number(sr?.current_price)||0;
+  const qty=mpData?.quantity_annual||Number(sr?.quantity)||1;
+  const prices=mpData?.prices_found||[];
+  const floor=mpData?.minimum_savings_floor||null;
+
+  // Build set of supplier names that have RFQs sent or quotes in
+  const rfqSent=new Set(g.suppliers.map(s=>(s.supplier_name||'').toLowerCase()));
+  const quoted=new Set(g.suppliers.filter(s=>s.status==='replied').map(s=>(s.supplier_name||'').toLowerCase()));
+
+  const vendorName=_extractVendor(sr?.description||'');
+
+  // Baseline row
+  let rows=`<tr style="border-bottom:1px solid var(--border);">
+    <td style="padding:6px 12px 6px 0;color:var(--text);font-size:9px;">Your current price</td>
+    <td style="padding:6px 12px 6px 0;color:var(--warn);text-align:right;font-size:9px;">${currentPrice>0?`$${currentPrice.toFixed(2)}/${uom}`:'—'}</td>
+    <td style="padding:6px 12px 6px 0;color:var(--text3);text-align:right;font-size:8px;">baseline</td>
+    <td style="padding:6px 12px 6px 0;color:var(--text3);text-align:right;font-size:8px;">—</td>
+    <td style="padding:6px 0;font-size:8px;color:var(--text3);">${vendorName!=='—'?vendorName:''}</td>
+  </tr>`;
+
+  prices.forEach(p=>{
+    const name=p.supplier||'Unknown';
+    const nameLower=name.toLowerCase();
+    const isQuoted=quoted.has(nameLower)||[...quoted].some(q=>nameLower.includes(q)||q.includes(nameLower));
+    const isRFQ=!isQuoted&&(rfqSent.has(nameLower)||[...rfqSent].some(q=>nameLower.includes(q)||q.includes(nameLower)));
+
+    let badge='';
+    if(isQuoted) badge=`<span style="color:#00e87a;font-size:7px;letter-spacing:1px;border:1px solid rgba(0,232,122,.4);padding:1px 5px;">✓ QUOTE IN</span>`;
+    else if(isRFQ) badge=`<span style="color:var(--accent);font-size:7px;letter-spacing:1px;border:1px solid rgba(0,200,240,.35);padding:1px 5px;">✉ RFQ SENT</span>`;
+
+    const savPct=p.savings_pct>0?`▼ ${p.savings_pct.toFixed(1)}%`:'—';
+    const savAnn=p.savings_annual>0?`$${Math.round(p.savings_annual).toLocaleString()}/yr`:'—';
+    const confColor=p.confidence==='HIGH'?'#00e87a':p.confidence==='MEDIUM'?'#f5c842':'#6a94ae';
+
+    rows+=`<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:6px 12px 6px 0;color:var(--text);font-size:9px;">${name} <span style="font-size:7px;color:${confColor};margin-left:4px;">${p.confidence||''}</span></td>
+      <td style="padding:6px 12px 6px 0;color:var(--text);text-align:right;font-size:9px;">$${Number(p.normalized_price||p.price).toFixed(2)}/${uom}</td>
+      <td style="padding:6px 12px 6px 0;color:${p.savings_pct>0?'#00e87a':'var(--text3)'};text-align:right;font-size:9px;">${savPct}</td>
+      <td style="padding:6px 12px 6px 0;color:${p.savings_annual>0?'#00e87a':'var(--text3)'};text-align:right;font-size:9px;">${savAnn}</td>
+      <td style="padding:6px 0;font-size:8px;">${badge}</td>
+    </tr>`;
+  });
+
+  let summaryBar='';
+  if(floor&&floor.savings_annual>0){
+    const expLow=Math.round(floor.savings_annual);
+    const expHigh=Math.round(floor.savings_annual*1.2);
+    summaryBar=`<div style="margin-top:10px;background:rgba(0,232,122,.06);border:1px solid rgba(0,232,122,.25);padding:9px 12px;font-size:8px;color:var(--accent2);letter-spacing:.5px;line-height:1.8;">
+      MINIMUM SAVINGS TODAY: $${expLow.toLocaleString()}/yr (${floor.savings_pct.toFixed(1)}%)&nbsp;&nbsp;·&nbsp;&nbsp;EXPECTED WITH BIDS: $${expLow.toLocaleString()}–$${expHigh.toLocaleString()}/yr
+      <br><span style="color:var(--text3);">Public prices shown. RFQ bids typically beat public pricing 10–20% through volume negotiation.</span>
+    </div>`;
+  }
+
+  return `<div style="margin-bottom:14px;background:var(--bg3);border:1px solid var(--border2);padding:12px 14px;">
+    <div style="font-size:7px;color:var(--accent);letter-spacing:2.5px;margin-bottom:4px;padding-bottom:6px;border-bottom:1px solid var(--border);">── WHAT'S AVAILABLE NOW ──</div>
+    <div style="font-size:7px;color:var(--text3);letter-spacing:1px;margin-bottom:10px;">Public market pricing · All prices per ${uom}</div>
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
+      <table style="width:100%;border-collapse:collapse;min-width:480px;">
+        <thead><tr style="font-size:7px;color:var(--text3);letter-spacing:1.5px;">
+          <th style="text-align:left;padding:0 12px 5px 0;font-weight:400;">SUPPLIER</th>
+          <th style="text-align:right;padding:0 12px 5px 0;font-weight:400;white-space:nowrap;">PRICE/${uom.toUpperCase()}</th>
+          <th style="text-align:right;padding:0 12px 5px 0;font-weight:400;">YOU PAY</th>
+          <th style="text-align:right;padding:0 12px 5px 0;font-weight:400;">YOU SAVE</th>
+          <th style="text-align:left;padding:0 0 5px 0;font-weight:400;">STATUS</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    ${summaryBar}
+  </div>`;
+}
+
+async function _loadMarketPrices(g, idx){
+  const sr=g.sourcingRequest;
+  const containerId=`mp-section-${idx}`;
+  const el=document.getElementById(containerId);
+  if(!el) return;
+
+  // Already have data
+  if(sr?.market_prices_data){
+    el.innerHTML=_renderMarketPricesSection(g,sr.market_prices_data);
+    return;
+  }
+
+  // Show spinner
+  el.innerHTML=`<div style="font-size:8px;color:var(--accent);letter-spacing:2px;padding:14px 0;animation:pulse 2s infinite;">◉ SCANNING PUBLIC MARKET PRICES...</div>`;
+
+  try{
+    const body={
+      title:g.item,
+      description:sr?.description||'',
+      quantity:Number(sr?.quantity||g.qty||1),
+      uom:sr?.uom||'ea',
+      pack_size:sr?.pack_size||null,
+      current_price:Number(sr?.current_price)||null,
+      sourcing_request_id:sr?.id||null,
+    };
+    const res=await fetch(API_URL+'/market-prices',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body),
+    });
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data=await res.json();
+    if(sr) sr.market_prices_data=data;
+    el.innerHTML=_renderMarketPricesSection(g,data);
+  }catch(e){
+    el.innerHTML=`<div style="font-size:8px;color:var(--text3);padding:10px 0;">Market price scan unavailable — ${e.message}</div>`;
   }
 }
 
@@ -780,7 +899,7 @@ async function loadPipeline(){
     let srRows=[];
     try{
       const srRes=await fetch(
-        `${SUPABASE_URL}/rest/v1/sourcing_requests?select=title,description,quantity,uom,current_price,scan_result&status=neq.cancelled`,
+        `${SUPABASE_URL}/rest/v1/sourcing_requests?select=id,title,description,quantity,uom,current_price,scan_result,market_prices_data&status=neq.cancelled`,
         {headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}}
       );
       if(srRes.ok) srRows=await srRes.json();
