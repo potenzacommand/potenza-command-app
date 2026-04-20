@@ -1313,6 +1313,11 @@ async function runAnalysis(){
     }
     const data=await resp.json();
     currentAnalysis=data.analysis;
+    // Persist market price + full scan result to sourcing_requests row
+    _updateSourcingRequest(_sourcingRequestId,{
+      current_price:data.cost_range_display?.mid||null,
+      scan_result:data,
+    });
     renderScanCostRange(data.cost_range_display,uom,packSize);
     renderBOM(data.analysis);
     renderScanSuppliers(data.identified_suppliers);
