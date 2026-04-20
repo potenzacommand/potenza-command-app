@@ -2589,25 +2589,40 @@ function _stopPulse(id){
 async function loadKPIs(){
   const SB={headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}};
 
-  // ── Card 1: Spend Under Management (hardcoded — 4 active events) ─────────
-  // SE2350 $11,448 + iShine $2,412 + VB Stripper $1,291 + Janitorial Bundle $5,600
-  {
-    const spendEl=document.getElementById('stat-spend');
-    const spendSub=document.getElementById('stat-spend-sub');
-    if(spendEl){spendEl.textContent='$20.7K/yr';}
-    if(spendSub){spendSub.textContent='4 active sourcing events';}
+  // ── Card 1: Spend Under Management ───────────────────────────────────────
+  try{
+    const res=await fetch(
+      `${SUPABASE_URL}/rest/v1/sourcing_requests?select=quantity,current_price,status&status=neq.cancelled`,SB);
+    const rows=res.ok?await res.json():[];
+    const total=rows.reduce((s,r)=>{
+      const q=Number(r.quantity)||0;
+      const p=Number(r.current_price)||0;
+      return s+(q>0&&p>0?q*p:0);
+    },0);
+    const el=document.getElementById('stat-spend');
+    const sub=document.getElementById('stat-spend-sub');
+    if(el){el.textContent=total>=1000000?`$${(total/1000000).toFixed(1)}M/yr`:total>=1000?`$${(total/1000).toFixed(1)}K/yr`:`$${Math.round(total)}/yr`;}
+    if(sub){sub.textContent=`${rows.length} active sourcing event${rows.length===1?'':'s'}`;}
     _stopPulse('stat-spend');
-  }
+  }catch(e){console.warn('KPI spend error:',e);}
 
-  // ── Card 2: Savings Identified (hardcoded — verified actuals) ────────────
-  // SE2350 $4,700 + iShine $1,404 + Stripper $427 + Bundle $907
-  {
-    const savEl=document.getElementById('stat-savings');
-    const savSub=document.getElementById('stat-savings-sub');
-    if(savEl){savEl.textContent='$7.4K/yr';}
-    if(savSub){savSub.textContent='vs. baseline spend';}
+  // ── Card 2: Savings Identified ────────────────────────────────────────────
+  try{
+    const res=await fetch(
+      `${SUPABASE_URL}/rest/v1/sourcing_requests?select=quantity,current_price&status=neq.cancelled&status=neq.awarded`,SB);
+    const rows=res.ok?await res.json():[];
+    const baseSpend=rows.reduce((s,r)=>{
+      const q=Number(r.quantity)||0;
+      const p=Number(r.current_price)||0;
+      return s+(q>0&&p>0?q*p:0);
+    },0);
+    const savings=baseSpend*0.15;
+    const el=document.getElementById('stat-savings');
+    const sub=document.getElementById('stat-savings-sub');
+    if(el){el.textContent=savings>=1000000?`$${(savings/1000000).toFixed(1)}M/yr`:savings>=1000?`$${(savings/1000).toFixed(1)}K/yr`:savings>0?`$${Math.round(savings)}/yr`:'—';}
+    if(sub){sub.textContent='vs. baseline spend (15% benchmark)';}
     _stopPulse('stat-savings');
-  }
+  }catch(e){console.warn('KPI savings error:',e);}
 
   // ── Card 3: RFQs Sent ────────────────────────────────────────────────────
   try{
