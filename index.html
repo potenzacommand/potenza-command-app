@@ -550,7 +550,7 @@ function renderLivePipeline(list){
         <div>
           <div class="req-id">LIVE PIPELINE · ${g.suppliers.length} SUPPLIER${g.suppliers.length!==1?'S':''} CONTACTED</div>
           <div class="req-title">${g.item}</div>
-          <div class="req-meta">QTY: ${Number(g.qty).toLocaleString()} lb · ${g.repliedCount} of ${g.suppliers.length} replied</div>
+          <div class="req-meta">${(()=>{const sr=g.sourcingRequest;const rawUom=(sr?.uom)||'';const uom=(!rawUom||rawUom==='other')?'lot':rawUom;const isLot=uom==='lot';const qty=sr?Number(sr.quantity):Number(g.qty);return isLot?`LOT PRICING · ${g.repliedCount} of ${g.suppliers.length} replied`:`QTY: ${Number(qty).toLocaleString()} ${uom} · ${g.repliedCount} of ${g.suppliers.length} replied`;})()}</div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0;">
           <div class="status-badge" style="color:${cfg.color};border-color:${cfg.color};animation:${cfg.pulse?'pulse 2s infinite':'none'}">${cfg.label}</div>
@@ -679,7 +679,7 @@ function _renderSourcingBrief(g){
   const isLot=uom==='lot'||rawUom==='other'||!rawUom;
   let annSpend='—', annSpendLabel='ANN. SPEND';
   if(price>0){
-    if(isLot){annSpend=_fmtDollar(price)+'/yr';annSpendLabel='EST. ANNUAL';}
+    if(isLot){annSpend=_fmtDollar(price)+'/yr';annSpendLabel='EST. ANNUAL BASKET';}
     else if(qty>0){annSpend=_fmtDollar(price*qty)+'/yr';}
   }
 
