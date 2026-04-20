@@ -2142,37 +2142,21 @@ async function loadKPIs(){
   const SB={headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}};
 
   // ── Card 1: Spend Under Management ──────────────────────────────────────
+  let totalSpend=0;
+  let spendRowCount=0;
   try{
-    const [trackRes,srRes]=await Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/rfq_tracking?select=item,quantity,status&status=neq.cancelled`,SB),
-      fetch(`${SUPABASE_URL}/rest/v1/sourcing_requests?select=title,current_price,scan_result&status=neq.cancelled`,SB),
-    ]);
-    const trackRows=trackRes.ok?await trackRes.json():[];
-    const srRows=srRes.ok?await srRes.json():[];
-
-    // Build price lookup from sourcing_requests
-    const priceMap={};
-    srRows.forEach(r=>{
-      const p=r.current_price||(r.scan_result?.market_data?.current_price);
-      if(p) priceMap[(r.title||'').toLowerCase()]=Number(p);
+    const res=await fetch(
+      `${SUPABASE_URL}/rest/v1/sourcing_requests?select=current_price,quantity&status=neq.cancelled`,SB);
+    const rows=res.ok?await res.json():[];
+    rows.forEach(r=>{
+      const price=Number(r.current_price);
+      const qty=Number(r.quantity);
+      if(price>0&&qty>0){totalSpend+=price*qty;spendRowCount++;}
     });
-
-    // One row per unique item (take first supplier row for quantity)
-    const seen=new Set();
-    let totalSpend=0;
-    trackRows.forEach(row=>{
-      const key=(row.item||'').toLowerCase();
-      if(seen.has(key)) return;
-      seen.add(key);
-      const qty=Number(row.quantity)||0;
-      const price=priceMap[key]||0;
-      totalSpend+=qty*price;
-    });
-
     const spendEl=document.getElementById('stat-spend');
     const spendSub=document.getElementById('stat-spend-sub');
     if(spendEl){spendEl.textContent=totalSpend>0?_fmtDollar(totalSpend)+'/yr':'—';}
-    if(spendSub){spendSub.textContent=`${seen.size} active sourcing event${seen.size!==1?'s':''}`;}
+    if(spendSub){spendSub.textContent=`${spendRowCount} active sourcing event${spendRowCount!==1?'s':''}`;}
     _stopPulse('stat-spend');
   }catch(e){console.warn('KPI spend error:',e);}
 
@@ -2183,13 +2167,16 @@ async function loadKPIs(){
     const rows=res.ok?await res.json():[];
     let totalSavings=0;
     rows.forEach(r=>{
-      const v=r.scan_result?.savings_vs_retail?.total;
+      const v=r.scan_result?.analysis?.cpo_recommendation?.savings_vs_retail?.total;
       if(v) totalSavings+=Number(v);
     });
+    // Fallback: estimate 30% of spend if no JSONB savings data found
+    const isFallback=totalSavings===0&&totalSpend>0;
+    if(isFallback) totalSavings=totalSpend*0.30;
     const savEl=document.getElementById('stat-savings');
     const savSub=document.getElementById('stat-savings-sub');
     if(savEl){savEl.textContent=totalSavings>0?_fmtDollar(totalSavings)+'/yr':'—';}
-    if(savSub){savSub.textContent=totalSavings>0?'vs. baseline spend':'no savings data yet';}
+    if(savSub){savSub.textContent=isFallback?'est. ~30% savings rate':'vs. baseline spend';}
     _stopPulse('stat-savings');
   }catch(e){console.warn('KPI savings error:',e);}
 
